@@ -40,6 +40,18 @@ a { text-decoration: none; color: inherit; }
 .field textarea { resize: vertical; min-height: 90px; font-family: monospace; }
 .field input:focus, .field select:focus, .field textarea:focus { outline: none; border-color: var(--pink); }
 
+/* ---------- Searchable dropdown (property picker) ---------- */
+.search-results {
+    position: absolute; top: 100%; left: 0; right: 0; z-index: 30;
+    background: #fff; border: 1.5px solid var(--border); border-top: none;
+    border-radius: 0 0 10px 10px; max-height: 220px; overflow-y: auto;
+    box-shadow: 0 12px 24px rgba(16,35,63,.12);
+}
+.search-result-row { padding: 12px 14px; font-size: 14px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.search-result-row:last-child { border-bottom: none; }
+.search-result-row:hover, .search-result-row.highlighted { background: var(--bg); color: var(--pink); }
+.search-no-results { padding: 12px 14px; font-size: 13.5px; color: var(--ink-soft); }
+
 .btn {
     display: block; width: 100%; text-align: center; border: none; border-radius: 10px;
     padding: 14px; font-weight: 700; font-size: 15px; cursor: pointer;
