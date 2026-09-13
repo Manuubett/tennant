@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Rent - Sanefi Rent App</title>
+<link rel="stylesheet" href="app-style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <h1 id="tenant-header">My Rent</h1>
+  <button class="logout-btn" id="logout-btn">Log Out</button>
+</header>
+
+<div class="app-container">
+  <div id="pending-notice"></div>
+
+  <div class="card">
+    <div class="card-title">Submit a Payment</div>
+    <div class="card-sub" style="margin-bottom:14px;">Paste the full M-Pesa confirmation message you received after paying rent.</div>
+    <form id="payment-form">
+      <div class="field">
+        <textarea name="message" placeholder="e.g. RK7X8Y9Z1A Confirmed. Ksh15,000.00 sent to..." required></textarea>
+      </div>
+      <button type="submit" class="btn btn-primary" id="submit-payment-btn">Submit Payment</button>
+      <p class="alert alert-error" id="payment-error" style="display:none;"></p>
+      <p class="alert alert-success" id="payment-success" style="display:none;"></p>
+    </form>
+  </div>
+
+  <h3 style="margin-bottom:8px;">Payment History</h3>
+  <div class="card" id="history-card">
+    <p class="empty-state">Loading&hellip;</p>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="auth-role.js"></script>
+<script src="mpesa-parser.js"></script>
+<script src="portal.js"></script>
+</body>
+</html>
