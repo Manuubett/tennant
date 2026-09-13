@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Log In - Sanefi Rent App</title>
+<link rel="stylesheet" href="app-style.css">
+</head>
+<body>
+<div class="auth-screen">
+  <div class="auth-card">
+    <h1>Welcome Back</h1>
+    <p class="subtitle">Log in to your account.</p>
+
+    <form id="login-form">
+      <div class="field">
+        <label>Email</label>
+        <input type="email" name="email" required>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" name="password" required>
+      </div>
+      <button type="submit" class="btn btn-primary" id="login-btn">Log In</button>
+      <p class="alert alert-error" id="login-error" style="display:none;"></p>
+    </form>
+
+    <p style="text-align:center; margin-top:18px; font-size:13.5px; color:var(--ink-soft);">
+      New tenant? <a href="signup.html" class="btn-link">Create an account</a>
+    </p>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="auth-role.js"></script>
+<script src="login.js"></script>
+</body>
+</html>
