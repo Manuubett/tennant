@@ -29,11 +29,11 @@
         <label>Password</label>
         <input type="password" name="password" minlength="6" required>
       </div>
-      <div class="field">
+      <div class="field" style="position:relative;">
         <label>Select Your Property</label>
-        <select name="landlordId" id="landlord-select" required>
-          <option value="">Loading properties&hellip;</option>
-        </select>
+        <input type="text" id="landlord-search" placeholder="Type to search your property..." autocomplete="off" required>
+        <input type="hidden" name="landlordId" id="landlord-id-input">
+        <div id="landlord-results" class="search-results" style="display:none;"></div>
       </div>
       <div class="field">
         <label>Select Your Unit / House Number</label>
