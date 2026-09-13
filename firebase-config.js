@@ -8,15 +8,15 @@
 // -> Project Settings -> General -> "Your apps" -> Web app
 // -> paste the generated config object below.
 // ---------------------------------------------------------------------
-const firebaseConfig = {
-  apiKey: "AIzaSyBfxyeNE8aeIv0VuJtDaYnQA54MS6JX0F4",
-  authDomain: "tennant-app-ee8d1.firebaseapp.com",
-  projectId: "tennant-app-ee8d1",
-  storageBucket: "tennant-app-ee8d1.firebasestorage.app",
-  messagingSenderId: "907886343081",
-  appId: "1:907886343081:web:5ff590b6a6e6c790a20ab8",
-  measurementId: "G-37QGXSX14R"
-};
+  const firebaseConfig = {
+    apiKey: "AIzaSyDC2cVxi-rAzofaDghX_P14iAqukvoGYAc",
+    authDomain: "sarefi-20d99.firebaseapp.com",
+    projectId: "sarefi-20d99",
+    storageBucket: "sarefi-20d99.firebasestorage.app",
+    messagingSenderId: "837562607207",
+    appId: "1:837562607207:web:806f22445431c5a0fd96c2",
+    measurementId: "G-91H2H8X4J7"
+  };
 
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
