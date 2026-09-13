@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Staff Dashboard - Sanefi Rent App</title>
+<link rel="stylesheet" href="app-style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <h1>Staff Dashboard</h1>
+  <button class="logout-btn" id="logout-btn">Log Out</button>
+</header>
+
+<div class="app-container">
+  <div class="stat-row" id="stat-row"></div>
+  <div class="tabs" id="tabs"></div>
+  <div id="tab-content">
+    <p class="empty-state">Loading&hellip;</p>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="auth-role.js"></script>
+<script src="mpesa-parser.js"></script>
+<script src="dashboard.js"></script>
+</body>
+</html>
