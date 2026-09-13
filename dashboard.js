@@ -2,6 +2,12 @@ const statRow = document.getElementById("stat-row");
 const tabsBox = document.getElementById("tabs");
 const contentBox = document.getElementById("tab-content");
 
+function escapeHTML(str) {
+  const div = document.createElement("div");
+  div.textContent = str || "";
+  return div.innerHTML;
+}
+
 document.getElementById("logout-btn").addEventListener("click", () => auth.signOut().then(() => window.location.href = "login.html"));
 
 let activeTab = "payments";
@@ -12,7 +18,9 @@ const TABS = [
   { key: "payments", label: "Payments" },
   { key: "landlords", label: "Landlords" },
   { key: "units", label: "Units" },
-  { key: "reports", label: "Reports" }
+  { key: "deposits", label: "Deposits" },
+  { key: "reports", label: "Reports" },
+  { key: "settings", label: "Settings" }
 ];
 
 function renderTabs() {
@@ -52,7 +60,9 @@ async function renderActiveTab() {
   if (activeTab === "payments") renderPaymentsTab();
   else if (activeTab === "landlords") renderLandlordsTab();
   else if (activeTab === "units") renderUnitsTab();
+  else if (activeTab === "deposits") renderDepositsTab();
   else if (activeTab === "reports") renderReportsTab();
+  else if (activeTab === "settings") renderSettingsTab();
 }
 
 // ---------------------------------------------------------------------
@@ -61,14 +71,12 @@ async function renderActiveTab() {
 function renderPaymentsTab() {
   db.collection("payments").orderBy("submittedAt", "desc").limit(100).onSnapshot((snapshot) => {
     if (activeTab !== "payments") return;
-    if (snapshot.empty) {
-      contentBox.innerHTML = `<p class="empty-state">No payments submitted yet.</p>`;
-      return;
-    }
-    contentBox.innerHTML = snapshot.docs.map((doc) => {
+    const listHTML = snapshot.empty ? `<p class="empty-state">No payments submitted yet.</p>` : snapshot.docs.map((doc) => {
       const p = doc.data();
       const mismatchBadge = p.recipientMatch === false
         ? `<span class="pill pill-mismatch">Recipient Mismatch</span>` : "";
+      const manualBadge = p.method === "paid_to_landlord"
+        ? `<span class="pill" style="background:#e6e9f0; color:var(--ink-soft);">Paid to Landlord</span>` : "";
       const actions = p.status === "pending"
         ? `
           <button class="btn btn-primary" style="width:auto; padding:8px 16px; font-size:13px;" data-action="verify" data-id="${doc.id}">Verify</button>
@@ -80,16 +88,31 @@ function renderPaymentsTab() {
             <div>
               <div class="card-title">KSh ${Number(p.amount || 0).toLocaleString()}</div>
               <div class="card-sub">${unitLabel(p.unitId)} &middot; ${landlordName(p.landlordId)}</div>
-              <div class="card-sub">${p.transactionCode} &middot; ${p.paidAtRaw || ""}</div>
+              <div class="card-sub">${p.transactionCode || "Manual entry"} &middot; ${p.paidAtRaw || ""}</div>
             </div>
             <div style="text-align:right; display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
               <span class="pill pill-${p.status}">${p.status}</span>
-              ${mismatchBadge}
+              ${mismatchBadge}${manualBadge}
             </div>
           </div>
           <div style="display:flex; gap:8px; margin-top:12px;">${actions}</div>
         </div>`;
     }).join("");
+
+    const unitOptions = unitsCache.map((doc) => `<option value="${doc.id}" data-landlord="${doc.data().landlordId}">${escapeHTML(doc.data().houseNumber)} — ${escapeHTML(landlordName(doc.data().landlordId))}</option>`).join("");
+
+    contentBox.innerHTML = listHTML + `
+      <div class="card">
+        <div class="card-title">Record a Payment Made Directly to Landlord</div>
+        <div class="card-sub" style="margin-bottom:12px;">Use this when a tenant paid the landlord directly, bypassing M-Pesa collection to Sanefi. This won't count toward Sanefi's commission for the period.</div>
+        <form id="manual-payment-form">
+          <div class="field"><label>Unit</label><select name="unitId" id="manual-unit-select" required>${unitOptions}</select></div>
+          <div class="field"><label>Amount (KSh)</label><input type="number" name="amount" min="0" required></div>
+          <div class="field"><label>Date Paid</label><input type="date" name="paidAt" required></div>
+          <div class="field"><label>Notes (optional)</label><input type="text" name="notes" placeholder="e.g. Confirmed by landlord via phone"></div>
+          <button type="submit" class="btn btn-outline">Record Payment</button>
+        </form>
+      </div>`;
 
     contentBox.querySelectorAll("[data-action]").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -104,6 +127,35 @@ function renderPaymentsTab() {
         }
       });
     });
+
+    const manualForm = document.getElementById("manual-payment-form");
+    if (manualForm) {
+      manualForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const data = new FormData(manualForm);
+        const unitId = data.get("unitId");
+        const unitDoc = unitsCache.find((d) => d.id === unitId);
+        try {
+          await db.collection("payments").add({
+            tenantId: null,
+            unitId,
+            landlordId: unitDoc ? unitDoc.data().landlordId : null,
+            rawMessage: null,
+            method: "paid_to_landlord",
+            transactionCode: null,
+            amount: Number(data.get("amount")) || 0,
+            paidAtRaw: data.get("paidAt"),
+            recipientMatch: null,
+            notes: data.get("notes") || "",
+            status: "verified", // staff-entered directly, no separate review needed
+            submittedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          manualForm.reset();
+        } catch (err) {
+          alert("Couldn't record payment: " + err.message);
+        }
+      });
+    }
   });
 }
 
@@ -190,11 +242,18 @@ function renderLandlordsTab() {
 function renderUnitsTab() {
   const rows = unitsCache.map((doc) => {
     const u = doc.data();
+    const vacant = u.occupancy === "vacant";
     return `
       <div class="card">
-        <div class="card-title">${u.houseNumber}</div>
-        <div class="card-sub">${u.propertyName || ""} &middot; ${landlordName(u.landlordId)}</div>
-        <div class="card-sub">Rent: KSh ${Number(u.rentAmount || 0).toLocaleString()}</div>
+        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+          <div>
+            <div class="card-title">${u.houseNumber} ${u.unitType ? "&middot; " + escapeHTML(u.unitType) : ""}</div>
+            <div class="card-sub">${u.propertyName || ""} &middot; ${landlordName(u.landlordId)}</div>
+            <div class="card-sub">Rent: KSh ${Number(u.rentAmount || 0).toLocaleString()}</div>
+            <div class="card-sub">Water Meter: ${u.waterMeterNumber || "—"} &middot; Power Meter: ${u.powerMeterNumber || "—"}</div>
+          </div>
+          <span class="pill ${vacant ? "pill-rejected" : "pill-verified"}" data-toggle-occupancy="${doc.id}" style="cursor:pointer;">${vacant ? "Vacant" : "Occupied"}</span>
+        </div>
       </div>`;
   }).join("") || `<p class="empty-state">No units added yet.</p>`;
 
@@ -206,12 +265,29 @@ function renderUnitsTab() {
       <div class="card-title">Add Unit</div>
       <form id="unit-form" style="margin-top:12px;">
         <div class="field"><label>Landlord / Property</label><select name="landlordId" required>${landlordOptions}</select></div>
-        <div class="field"><label>House / Unit Number</label><input type="text" name="houseNumber" placeholder="e.g. A101" required></div>
-        <div class="field"><label>Property Name</label><input type="text" name="propertyName"></div>
+        <div class="field"><label>House / Unit Number</label><input type="text" name="houseNumber" placeholder="e.g. 3A" required></div>
+        <div class="field"><label>Property Name</label><input type="text" name="propertyName" placeholder="e.g. E&amp;L Apartments"></div>
+        <div class="field"><label>Unit Type</label><input type="text" name="unitType" placeholder="e.g. 2BR, Bedsitter, Single"></div>
         <div class="field"><label>Monthly Rent (KSh)</label><input type="number" name="rentAmount" min="0"></div>
+        <div class="field"><label>Water Meter Number</label><input type="text" name="waterMeterNumber"></div>
+        <div class="field"><label>Power Meter Number</label><input type="text" name="powerMeterNumber"></div>
         <button type="submit" class="btn btn-primary">Add Unit</button>
       </form>
     </div>`;
+
+  contentBox.querySelectorAll("[data-toggle-occupancy]").forEach((pill) => {
+    pill.addEventListener("click", async () => {
+      const id = pill.dataset.toggleOccupancy;
+      const doc = unitsCache.find((d) => d.id === id);
+      const currentlyVacant = doc.data().occupancy === "vacant";
+      try {
+        await db.collection("units").doc(id).update({ occupancy: currentlyVacant ? "occupied" : "vacant" });
+        renderActiveTab();
+      } catch (err) {
+        alert("Couldn't update: " + err.message);
+      }
+    });
+  });
 
   document.getElementById("unit-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -221,11 +297,126 @@ function renderUnitsTab() {
         landlordId: data.get("landlordId"),
         houseNumber: data.get("houseNumber"),
         propertyName: data.get("propertyName") || "",
-        rentAmount: Number(data.get("rentAmount")) || 0
+        unitType: data.get("unitType") || "",
+        rentAmount: Number(data.get("rentAmount")) || 0,
+        waterMeterNumber: data.get("waterMeterNumber") || "",
+        powerMeterNumber: data.get("powerMeterNumber") || "",
+        occupancy: "vacant"
       });
       renderActiveTab();
     } catch (err) {
       alert("Couldn't add unit: " + err.message);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------
+// DEPOSITS TAB
+// ---------------------------------------------------------------------
+function renderDepositsTab() {
+  db.collection("deposits").orderBy("paidAt", "desc").onSnapshot((snapshot) => {
+    if (activeTab !== "deposits") return;
+
+    const rows = snapshot.empty ? `<p class="empty-state">No deposits recorded yet.</p>` : snapshot.docs.map((doc) => {
+      const d = doc.data();
+      const refunded = d.status === "refunded";
+      return `
+        <div class="card">
+          <div class="card-title">${escapeHTML(d.tenantName)} &middot; ${unitLabel(d.unitId)}</div>
+          <div class="card-sub">Paid: KSh ${Number(d.amountPaid || 0).toLocaleString()} on ${d.paidAt || ""}</div>
+          ${refunded ? `<div class="card-sub">Refunded: KSh ${Number(d.amountRefundable || 0).toLocaleString()} (deductions: KSh ${Number(d.deductions || 0).toLocaleString()})</div>` : ""}
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
+            <span class="pill ${refunded ? "pill-verified" : "pill-pending"}">${refunded ? "Refunded" : "Held"}</span>
+            ${!refunded ? `<button class="btn btn-outline" style="width:auto; padding:8px 16px; font-size:13px;" data-action="refund" data-id="${doc.id}">Process Refund</button>` : ""}
+          </div>
+        </div>`;
+    }).join("");
+
+    const unitOptions = unitsCache.map((doc) => `<option value="${doc.id}">${escapeHTML(doc.data().houseNumber)} — ${escapeHTML(landlordName(doc.data().landlordId))}</option>`).join("");
+
+    contentBox.innerHTML = rows + `
+      <div class="card">
+        <div class="card-title">Record a Deposit</div>
+        <form id="deposit-form" style="margin-top:12px;">
+          <div class="field"><label>Unit</label><select name="unitId" required>${unitOptions}</select></div>
+          <div class="field"><label>Tenant Name</label><input type="text" name="tenantName" required></div>
+          <div class="field"><label>Amount Paid (KSh)</label><input type="number" name="amountPaid" min="0" required></div>
+          <div class="field"><label>Date Paid</label><input type="date" name="paidAt" required></div>
+          <button type="submit" class="btn btn-primary">Record Deposit</button>
+        </form>
+      </div>`;
+
+    document.getElementById("deposit-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = new FormData(e.target);
+      const unitId = data.get("unitId");
+      const unitDoc = unitsCache.find((d) => d.id === unitId);
+      try {
+        await db.collection("deposits").add({
+          unitId,
+          landlordId: unitDoc ? unitDoc.data().landlordId : null,
+          tenantName: data.get("tenantName"),
+          amountPaid: Number(data.get("amountPaid")) || 0,
+          paidAt: data.get("paidAt"),
+          status: "held",
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        e.target.reset();
+      } catch (err) {
+        alert("Couldn't record deposit: " + err.message);
+      }
+    });
+
+    contentBox.querySelectorAll("[data-action='refund']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const deductions = Number(prompt("Any deductions from the deposit? Enter 0 if none.", "0")) || 0;
+        const doc = snapshot.docs.find((d) => d.id === btn.dataset.id);
+        const amountRefundable = Number(doc.data().amountPaid || 0) - deductions;
+        try {
+          await db.collection("deposits").doc(btn.dataset.id).update({
+            status: "refunded",
+            deductions,
+            amountRefundable,
+            refundedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } catch (err) {
+          alert("Couldn't process refund: " + err.message);
+        }
+      });
+    });
+  });
+}
+
+// ---------------------------------------------------------------------
+// SETTINGS TAB
+// ---------------------------------------------------------------------
+async function renderSettingsTab() {
+  const configDoc = await db.doc("settings/commission").get();
+  const config = configDoc.exists ? configDoc.data() : { commissionRate: 0.06, cleaningFee: 2000 };
+
+  contentBox.innerHTML = `
+    <div class="card">
+      <div class="card-title">Commission Settings</div>
+      <div class="card-sub" style="margin-bottom:14px;">Applies the same way to every landlord's monthly commission statement.</div>
+      <form id="settings-form">
+        <div class="field"><label>Commission Rate (%)</label><input type="number" name="commissionRatePercent" step="0.1" min="0" max="100" value="${(config.commissionRate * 100).toFixed(1)}" required></div>
+        <div class="field"><label>Cleaning Fee (KSh, flat per property per month)</label><input type="number" name="cleaningFee" min="0" value="${config.cleaningFee}" required></div>
+        <button type="submit" class="btn btn-primary">Save Settings</button>
+        <p class="alert alert-success" id="settings-success" style="display:none;">Saved.</p>
+      </form>
+    </div>`;
+
+  document.getElementById("settings-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = new FormData(e.target);
+    try {
+      await db.doc("settings/commission").set({
+        commissionRate: Number(data.get("commissionRatePercent")) / 100,
+        cleaningFee: Number(data.get("cleaningFee"))
+      });
+      document.getElementById("settings-success").style.display = "block";
+    } catch (err) {
+      alert("Couldn't save: " + err.message);
     }
   });
 }
@@ -243,6 +434,7 @@ function renderReportsTab() {
       <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
         <button class="btn btn-primary" id="btn-rent-roll" style="width:auto; padding:10px 16px;">Rent Roll (This Month)</button>
         <button class="btn btn-outline" id="btn-arrears" style="width:auto; padding:10px 16px;">Arrears</button>
+        <button class="btn btn-outline" id="btn-commission" style="width:auto; padding:10px 16px;">Commission Statement</button>
         <button class="btn btn-outline" id="btn-export" style="width:auto; padding:10px 16px;">Export CSV</button>
       </div>
     </div>
@@ -250,7 +442,48 @@ function renderReportsTab() {
 
   document.getElementById("btn-rent-roll").addEventListener("click", showRentRoll);
   document.getElementById("btn-arrears").addEventListener("click", showArrears);
+  document.getElementById("btn-commission").addEventListener("click", showCommissionStatement);
   document.getElementById("btn-export").addEventListener("click", exportCSV);
+}
+
+async function showCommissionStatement() {
+  const output = document.getElementById("report-output");
+  output.innerHTML = `<p class="empty-state">Loading&hellip;</p>`;
+  const landlordId = document.getElementById("report-landlord").value;
+  const { start, end } = currentMonthRange();
+
+  const configDoc = await db.doc("settings/commission").get();
+  const config = configDoc.exists ? configDoc.data() : { commissionRate: 0.06, cleaningFee: 2000 };
+
+  const paymentsSnap = await db.collection("payments")
+    .where("status", "==", "verified")
+    .where("submittedAt", ">=", start)
+    .where("submittedAt", "<", end)
+    .get();
+
+  const relevantLandlords = landlordId ? landlordsCache.filter((l) => l.id === landlordId) : landlordsCache;
+
+  const statements = relevantLandlords.map((l) => {
+    // Only payments actually collected by Sanefi count toward commission —
+    // amounts paid directly to the landlord ("paid_to_landlord") don't.
+    const collected = paymentsSnap.docs
+      .filter((d) => d.data().landlordId === l.id && d.data().method !== "paid_to_landlord")
+      .reduce((sum, d) => sum + Number(d.data().amount || 0), 0);
+    const commission = Math.round(collected * config.commissionRate);
+    const totalFees = commission + config.cleaningFee;
+    const dueToLandlord = collected - totalFees;
+    return { name: l.data().name, collected, commission, cleaningFee: config.cleaningFee, totalFees, dueToLandlord };
+  });
+
+  output.innerHTML = `<div class="card"><div class="card-title">Commission Statement &mdash; ${start.toLocaleString("en-KE", { month: "long", year: "numeric" })}</div>` +
+    statements.map((s) => `
+      <div style="padding:12px 0; border-bottom:1px solid var(--border);">
+        <div style="font-weight:700; margin-bottom:6px;">${escapeHTML(s.name)}</div>
+        <div class="payment-row"><div>Rent Collected</div><span>KSh ${s.collected.toLocaleString()}</span></div>
+        <div class="payment-row"><div>Commission (${(config.commissionRate * 100).toFixed(1)}%)</div><span>KSh ${s.commission.toLocaleString()}</span></div>
+        <div class="payment-row"><div>Cleaning Fee</div><span>KSh ${s.cleaningFee.toLocaleString()}</span></div>
+        <div class="payment-row"><div><strong>Amount Due to Landlord</strong></div><span><strong>KSh ${s.dueToLandlord.toLocaleString()}</strong></span></div>
+      </div>`).join("") + `</div>`;
 }
 
 function currentMonthRange() {
