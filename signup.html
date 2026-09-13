@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign Up - Sanefi Rent App</title>
+<link rel="stylesheet" href="app-style.css">
+</head>
+<body>
+<div class="auth-screen">
+  <div class="auth-card">
+    <h1>Create Account</h1>
+    <p class="subtitle">Register to track and submit your rent payments.</p>
+
+    <form id="signup-form">
+      <div class="field">
+        <label>Full Name</label>
+        <input type="text" name="name" required>
+      </div>
+      <div class="field">
+        <label>Phone Number</label>
+        <input type="tel" name="phone" placeholder="07XX XXX XXX" required>
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" name="email" required>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" name="password" minlength="6" required>
+      </div>
+      <div class="field">
+        <label>Select Your Property</label>
+        <select name="landlordId" id="landlord-select" required>
+          <option value="">Loading properties&hellip;</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Select Your Unit / House Number</label>
+        <select name="unitId" id="unit-select" required disabled>
+          <option value="">Choose a property first</option>
+        </select>
+      </div>
+
+      <button type="submit" class="btn btn-primary" id="signup-btn">Create Account</button>
+      <p class="alert alert-error" id="signup-error" style="display:none;"></p>
+    </form>
+
+    <p style="text-align:center; margin-top:18px; font-size:13.5px; color:var(--ink-soft);">
+      Already have an account? <a href="login.html" class="btn-link">Log in</a>
+    </p>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="signup.js"></script>
+</body>
+</html>
