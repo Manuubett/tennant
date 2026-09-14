@@ -75,8 +75,8 @@ function renderPaymentsTab() {
       const p = doc.data();
       const mismatchBadge = p.recipientMatch === false
         ? `<span class="pill pill-mismatch">Recipient Mismatch</span>` : "";
-      const manualBadge = p.method === "paid_to_landlord"
-        ? `<span class="pill" style="background:#e6e9f0; color:var(--ink-soft);">Paid to Landlord</span>` : "";
+      const manualBadge = p.enteredByStaff
+        ? `<span class="pill" style="background:#e6e9f0; color:var(--ink-soft);">Entered by Staff</span>` : "";
       const actions = p.status === "pending"
         ? `
           <button class="btn btn-primary" style="width:auto; padding:8px 16px; font-size:13px;" data-action="verify" data-id="${doc.id}">Verify</button>
@@ -103,14 +103,13 @@ function renderPaymentsTab() {
 
     contentBox.innerHTML = listHTML + `
       <div class="card">
-        <div class="card-title">Record a Payment Made Directly to Landlord</div>
-        <div class="card-sub" style="margin-bottom:12px;">Use this when a tenant paid the landlord directly, bypassing M-Pesa collection to Sanefi. This won't count toward Sanefi's commission for the period.</div>
+        <div class="card-title">Record Payment on Behalf of a Tenant</div>
+        <div class="card-sub" style="margin-bottom:12px;">Use this when a tenant forwarded their M-Pesa confirmation (e.g. via WhatsApp) instead of submitting it themselves through the app. Paste the exact message text below — it's parsed and counted toward commission the same as any tenant-submitted payment.</div>
         <form id="manual-payment-form">
           <div class="field"><label>Unit</label><select name="unitId" id="manual-unit-select" required>${unitOptions}</select></div>
-          <div class="field"><label>Amount (KSh)</label><input type="number" name="amount" min="0" required></div>
-          <div class="field"><label>Date Paid</label><input type="date" name="paidAt" required></div>
-          <div class="field"><label>Notes (optional)</label><input type="text" name="notes" placeholder="e.g. Confirmed by landlord via phone"></div>
+          <div class="field"><label>M-Pesa Message</label><textarea name="message" placeholder="Paste the full confirmation message here..." required></textarea></div>
           <button type="submit" class="btn btn-outline">Record Payment</button>
+          <p class="alert alert-error" id="manual-payment-error" style="display:none;"></p>
         </form>
       </div>`;
 
@@ -129,30 +128,57 @@ function renderPaymentsTab() {
     });
 
     const manualForm = document.getElementById("manual-payment-form");
+    const manualError = document.getElementById("manual-payment-error");
     if (manualForm) {
       manualForm.addEventListener("submit", async (e) => {
         e.preventDefault();
+        manualError.style.display = "none";
+
         const data = new FormData(manualForm);
         const unitId = data.get("unitId");
+        const rawMessage = data.get("message");
         const unitDoc = unitsCache.find((d) => d.id === unitId);
+        const landlordId = unitDoc ? unitDoc.data().landlordId : null;
+
+        const parsed = parseMpesaMessage(rawMessage);
+        if (!parsed.success) {
+          manualError.textContent = parsed.error;
+          manualError.style.display = "block";
+          return;
+        }
+
         try {
+          // Same duplicate check as the tenant portal — a message
+          // shouldn't be recorded twice regardless of who enters it.
+          const dupe = await db.collection("payments").where("transactionCode", "==", parsed.transactionCode).get();
+          if (!dupe.empty) {
+            manualError.textContent = "This payment has already been recorded.";
+            manualError.style.display = "block";
+            return;
+          }
+
+          const landlordDoc = landlordsCache.find((d) => d.id === landlordId);
+          const recipientMatch = landlordDoc ? checkRecipientMatch(parsed, landlordDoc.data()) : false;
+
           await db.collection("payments").add({
             tenantId: null,
             unitId,
-            landlordId: unitDoc ? unitDoc.data().landlordId : null,
-            rawMessage: null,
-            method: "paid_to_landlord",
-            transactionCode: null,
-            amount: Number(data.get("amount")) || 0,
-            paidAtRaw: data.get("paidAt"),
-            recipientMatch: null,
-            notes: data.get("notes") || "",
-            status: "verified", // staff-entered directly, no separate review needed
+            landlordId,
+            rawMessage: parsed.rawMessage,
+            method: parsed.method,
+            transactionCode: parsed.transactionCode,
+            amount: parsed.amount,
+            paidAtRaw: parsed.paidAtRaw,
+            recipientName: parsed.recipientName || null,
+            recipientMatch,
+            enteredByStaff: true,
+            status: "verified", // staff already reviewed the message before entering it
             submittedAt: firebase.firestore.FieldValue.serverTimestamp()
           });
           manualForm.reset();
         } catch (err) {
-          alert("Couldn't record payment: " + err.message);
+          manualError.textContent = "Couldn't record payment: " + err.message;
+          manualError.style.display = "block";
         }
       });
     }
@@ -464,10 +490,12 @@ async function showCommissionStatement() {
   const relevantLandlords = landlordId ? landlordsCache.filter((l) => l.id === landlordId) : landlordsCache;
 
   const statements = relevantLandlords.map((l) => {
-    // Only payments actually collected by Sanefi count toward commission —
-    // amounts paid directly to the landlord ("paid_to_landlord") don't.
+    // Every verified payment counts toward commission the same way,
+    // whether the tenant submitted it themselves or staff entered it on
+    // their behalf — money always lands in the landlord's own account
+    // either way, and Sanefi's fee is for managing that collection.
     const collected = paymentsSnap.docs
-      .filter((d) => d.data().landlordId === l.id && d.data().method !== "paid_to_landlord")
+      .filter((d) => d.data().landlordId === l.id)
       .reduce((sum, d) => sum + Number(d.data().amount || 0), 0);
     const commission = Math.round(collected * config.commissionRate);
     const totalFees = commission + config.cleaningFee;
