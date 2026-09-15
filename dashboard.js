@@ -18,6 +18,57 @@ let tenantsCache = [];
 let viewingTenantId = null;
 let overviewCharts = {};
 
+// Bug fix: onSnapshot listeners (Payments, Deposits tabs) were never
+// unsubscribed when switching tabs, so navigating back and forth stacked
+// up duplicate listeners. Every listener-based tab pushes its unsubscribe
+// function here, and renderActiveTab() clears them all before rendering
+// whichever tab is now active.
+let activeListeners = [];
+function clearActiveListeners() {
+  activeListeners.forEach((unsub) => {
+    try { unsub(); } catch (e) { /* already detached */ }
+  });
+  activeListeners = [];
+}
+
+// Single source of truth for chart colors — canvas rendering can't read
+// CSS custom properties directly, so these mirror the values in style.css.
+const COLORS = {
+  pink: "#e6007e",
+  pinkSoft: "rgba(230,0,126,.12)",
+  green: "#1e9e5a",
+  greenTint: "#e8f7ee",
+  amber: "#a9760a",
+  amberTint: "#fdf3e0",
+  red: "#b42323",
+  redTint: "rgba(180,35,35,.10)",
+  ink: "#10233f",
+  inkSoft: "#4b5c72",
+  inkFaint: "#8c99ac",
+  border: "#e4e9f0",
+  surface: "#ffffff"
+};
+
+const money = (n) => `KSh ${Number(n || 0).toLocaleString()}`;
+
+// Applied once so every chart on the page shares consistent typography
+// and grid styling instead of Chart.js defaults.
+(function configureChartDefaults() {
+  if (typeof Chart === "undefined") return;
+  Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+  Chart.defaults.font.size = 12.5;
+  Chart.defaults.color = COLORS.inkSoft;
+  Chart.defaults.plugins.legend.labels.usePointStyle = true;
+  Chart.defaults.plugins.legend.labels.pointStyle = "circle";
+  Chart.defaults.plugins.legend.labels.boxWidth = 8;
+  Chart.defaults.plugins.legend.labels.padding = 16;
+  Chart.defaults.plugins.tooltip.backgroundColor = COLORS.ink;
+  Chart.defaults.plugins.tooltip.padding = 10;
+  Chart.defaults.plugins.tooltip.cornerRadius = 8;
+  Chart.defaults.plugins.tooltip.titleFont = { weight: "700", size: 12.5 };
+  Chart.defaults.plugins.tooltip.bodyFont = { size: 12.5 };
+})();
+
 // Minimal line-icon set (Feather-style, 1.75 stroke) so each section reads at a glance in the sidebar
 const ICONS = {
   overview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>',
@@ -106,6 +157,7 @@ function isOverdue(tenant, paidUnitIds) {
 }
 
 async function renderActiveTab() {
+  clearActiveListeners();
   contentBox.innerHTML = `<p class="empty-state">Loading&hellip;</p>`;
   await refreshCaches();
   if (activeTab === "overview") renderOverviewTab();
@@ -129,12 +181,25 @@ async function renderOverviewTab() {
   }
   const sixMonthsAgoStart = months[0];
 
-  const [trendSnap, thisMonthSnap] = await Promise.all([
+  // Arrears-by-month queries used to run one at a time in a for-loop
+  // (six sequential round trips). They're independent of each other, so
+  // running them together with the trend/this-month queries cuts load
+  // time roughly in half.
+  const [trendSnap, thisMonthSnap, arrearsSnaps] = await Promise.all([
     db.collection("payments").where("status", "==", "verified").where("submittedAt", ">=", sixMonthsAgoStart).get(),
     (() => {
       const { start, end } = currentMonthRange();
       return db.collection("payments").where("submittedAt", ">=", start).where("submittedAt", "<", end).get();
-    })()
+    })(),
+    Promise.all(months.map((m) => {
+      const start = m;
+      const end = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+      return db.collection("payments")
+        .where("status", "==", "verified")
+        .where("submittedAt", ">=", start)
+        .where("submittedAt", "<", end)
+        .get();
+    }))
   ]);
 
   if (activeTab !== "overview") return;
@@ -160,20 +225,10 @@ async function renderOverviewTab() {
   // Uses today's unit list for all 6 months since we don't track historical
   // occupancy changes; treat this as an approximation, not an exact record.
   const occupiedUnits = unitsCache.filter((u) => u.data().occupancy !== "vacant");
-  const arrearsByMonth = [];
-  for (const m of months) {
-    const start = m;
-    const end = new Date(m.getFullYear(), m.getMonth() + 1, 1);
-    const snap = await db.collection("payments")
-      .where("status", "==", "verified")
-      .where("submittedAt", ">=", start)
-      .where("submittedAt", "<", end)
-      .get();
+  const arrearsByMonth = arrearsSnaps.map((snap) => {
     const paidUnitIds = new Set(snap.docs.map((d) => d.data().unitId));
-    arrearsByMonth.push(occupiedUnits.filter((u) => !paidUnitIds.has(u.id)).length);
-  }
-
-  if (activeTab !== "overview") return;
+    return occupiedUnits.filter((u) => !paidUnitIds.has(u.id)).length;
+  });
 
   const occupiedCount = occupiedUnits.length;
   const vacantCount = unitsCache.length - occupiedCount;
@@ -181,36 +236,137 @@ async function renderOverviewTab() {
 
   contentBox.innerHTML = `
     <div class="overview-actions"><button class="btn btn-primary" id="btn-download-pdf">Download PDF Report</button></div>
-    <div class="chart-card"><div class="card-title">Rent Collected — Last 6 Months</div><canvas id="chart-trend"></canvas></div>
-    <div class="chart-card"><div class="card-title">Payment Status — This Month</div><canvas id="chart-status"></canvas></div>
-    <div class="chart-card"><div class="card-title">Arrears Trend — Last 6 Months</div><canvas id="chart-arrears"></canvas></div>
-    <div class="chart-card"><div class="card-title">Occupancy</div><canvas id="chart-occupancy"></canvas></div>`;
+    <div class="chart-card">
+      <div class="card-title">Rent Collected — Last 6 Months</div>
+      <div class="chart-canvas-wrap"><canvas id="chart-trend"></canvas></div>
+    </div>
+    <div class="chart-grid-2">
+      <div class="chart-card">
+        <div class="card-title">Payment Status — This Month</div>
+        <div class="chart-canvas-wrap chart-canvas-wrap-sm"><canvas id="chart-status"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="card-title">Occupancy</div>
+        <div class="chart-canvas-wrap chart-canvas-wrap-sm"><canvas id="chart-occupancy"></canvas></div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="card-title">Arrears Trend — Last 6 Months</div>
+      <div class="chart-canvas-wrap"><canvas id="chart-arrears"></canvas></div>
+    </div>`;
 
   Object.values(overviewCharts).forEach((c) => c.destroy());
   overviewCharts = {};
 
   overviewCharts.trend = new Chart(document.getElementById("chart-trend"), {
     type: "bar",
-    data: { labels: monthLabels, datasets: [{ label: "KSh Collected", data: monthlyTotals, backgroundColor: "#e6007e", borderRadius: 6 }] },
-    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+    data: {
+      labels: monthLabels,
+      datasets: [{
+        label: "Rent Collected",
+        data: monthlyTotals,
+        backgroundColor: COLORS.pink,
+        hoverBackgroundColor: "#c40068",
+        borderRadius: 6,
+        borderSkipped: false,
+        maxBarThickness: 46
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => money(ctx.parsed.y) } }
+      },
+      scales: {
+        x: { grid: { display: false }, border: { display: false } },
+        y: {
+          beginAtZero: true,
+          grid: { color: COLORS.border },
+          border: { display: false },
+          ticks: { callback: (v) => v >= 1000 ? `${v / 1000}k` : v }
+        }
+      }
+    }
   });
 
   overviewCharts.status = new Chart(document.getElementById("chart-status"), {
     type: "doughnut",
-    data: { labels: ["Verified", "Pending", "Rejected"], datasets: [{ data: [statusCounts.verified, statusCounts.pending, statusCounts.rejected], backgroundColor: ["#1e9e5a", "#a9760a", "#b42323"] }] },
-    options: { plugins: { legend: { position: "bottom" } } }
+    data: {
+      labels: ["Verified", "Pending", "Rejected"],
+      datasets: [{
+        data: [statusCounts.verified, statusCounts.pending, statusCounts.rejected],
+        backgroundColor: [COLORS.green, COLORS.amber, COLORS.red],
+        borderColor: COLORS.surface,
+        borderWidth: 3,
+        hoverOffset: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: "68%",
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${ctx.parsed}` } }
+      }
+    }
   });
 
   overviewCharts.arrears = new Chart(document.getElementById("chart-arrears"), {
     type: "line",
-    data: { labels: monthLabels, datasets: [{ label: "Units in Arrears", data: arrearsByMonth, borderColor: "#b42323", backgroundColor: "rgba(180,35,35,.1)", fill: true, tension: 0.3 }] },
-    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+    data: {
+      labels: monthLabels,
+      datasets: [{
+        label: "Units in Arrears",
+        data: arrearsByMonth,
+        borderColor: COLORS.red,
+        backgroundColor: COLORS.redTint,
+        pointBackgroundColor: COLORS.red,
+        pointBorderColor: COLORS.surface,
+        pointBorderWidth: 2,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        fill: true,
+        tension: 0.35
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y} unit${ctx.parsed.y === 1 ? "" : "s"}` } }
+      },
+      scales: {
+        x: { grid: { display: false }, border: { display: false } },
+        y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 }, grid: { color: COLORS.border }, border: { display: false } }
+      }
+    }
   });
 
   overviewCharts.occupancy = new Chart(document.getElementById("chart-occupancy"), {
     type: "doughnut",
-    data: { labels: ["Occupied", "Vacant"], datasets: [{ data: [occupiedCount, vacantCount], backgroundColor: ["#e6007e", "#e4e9f0"] }] },
-    options: { plugins: { legend: { position: "bottom" } } }
+    data: {
+      labels: ["Occupied", "Vacant"],
+      datasets: [{
+        data: [occupiedCount, vacantCount],
+        backgroundColor: [COLORS.pink, COLORS.border],
+        borderColor: COLORS.surface,
+        borderWidth: 3,
+        hoverOffset: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: "68%",
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${ctx.parsed}` } }
+      }
+    }
   });
 
   document.getElementById("btn-download-pdf").addEventListener("click", () => generateOverviewPDF({ occupiedCount, vacantCount, statusCounts }));
@@ -240,7 +396,7 @@ function generateOverviewPDF(data) {
     occupancy: "Occupancy"
   };
 
-  chartOrder.forEach((key, i) => {
+  chartOrder.forEach((key) => {
     const chart = overviewCharts[key];
     if (!chart) return;
     doc.addPage();
@@ -254,42 +410,46 @@ function generateOverviewPDF(data) {
 }
 
 // ---------------------------------------------------------------------
-// PAYMENTS TAB
+// PAYMENTS TAB (table view)
 // ---------------------------------------------------------------------
 function renderPaymentsTab() {
-  db.collection("payments").orderBy("submittedAt", "desc").limit(100).onSnapshot((snapshot) => {
+  const unsubscribe = db.collection("payments").orderBy("submittedAt", "desc").limit(100).onSnapshot((snapshot) => {
     if (activeTab !== "payments") return;
-    const listHTML = snapshot.empty ? `<p class="empty-state">No payments submitted yet.</p>` : snapshot.docs.map((doc) => {
+
+    const rowsHTML = snapshot.empty ? "" : snapshot.docs.map((doc) => {
       const p = doc.data();
       const mismatchBadge = p.recipientMatch === false
-        ? `<span class="pill pill-mismatch">Recipient Mismatch</span>` : "";
+        ? `<span class="pill pill-mismatch">Mismatch</span>` : "";
       const manualBadge = p.enteredByStaff
-        ? `<span class="pill" style="background:#e6e9f0; color:var(--ink-soft);">Entered by Staff</span>` : "";
+        ? `<span class="pill pill-neutral">Staff Entry</span>` : "";
       const actions = p.status === "pending"
         ? `
-          <button class="btn btn-primary" style="width:auto; padding:8px 16px; font-size:13px;" data-action="verify" data-id="${doc.id}">Verify</button>
-          <button class="btn btn-outline" style="width:auto; padding:8px 16px; font-size:13px;" data-action="reject" data-id="${doc.id}">Reject</button>`
+          <button class="btn-table-action" data-action="verify" data-id="${doc.id}">Verify</button>
+          <button class="btn-table-action btn-table-action-danger" data-action="reject" data-id="${doc.id}">Reject</button>`
         : "";
       return `
-        <div class="card">
-          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
-            <div>
-              <div class="card-title">KSh ${Number(p.amount || 0).toLocaleString()}</div>
-              <div class="card-sub">${unitLabel(p.unitId)} &middot; ${landlordName(p.landlordId)}</div>
-              <div class="card-sub">${p.transactionCode || "Manual entry"} &middot; ${p.paidAtRaw || ""}</div>
-            </div>
-            <div style="text-align:right; display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
-              <span class="pill pill-${p.status}">${p.status}</span>
-              ${mismatchBadge}${manualBadge}
-            </div>
-          </div>
-          <div style="display:flex; gap:8px; margin-top:12px;">${actions}</div>
-        </div>`;
+        <tr>
+          <td data-label="Amount"><div class="cell-title">${money(p.amount)}</div></td>
+          <td data-label="Unit">${escapeHTML(unitLabel(p.unitId))}</td>
+          <td data-label="Landlord">${escapeHTML(landlordName(p.landlordId))}</td>
+          <td data-label="Reference">${escapeHTML(p.transactionCode || "Manual entry")}<div class="cell-muted" style="font-size:11.5px; margin-top:2px;">${escapeHTML(p.paidAtRaw || "")}</div></td>
+          <td data-label="Status"><span class="pill pill-${p.status}">${p.status}</span> ${mismatchBadge}${manualBadge}</td>
+          <td data-label="" class="table-actions">${actions}</td>
+        </tr>`;
     }).join("");
 
     const unitOptions = unitsCache.map((doc) => `<option value="${doc.id}" data-landlord="${doc.data().landlordId}">${escapeHTML(doc.data().houseNumber)} — ${escapeHTML(landlordName(doc.data().landlordId))}</option>`).join("");
 
-    contentBox.innerHTML = listHTML + `
+    contentBox.innerHTML = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr><th>Amount</th><th>Unit</th><th>Landlord</th><th>Reference</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody>${rowsHTML}</tbody>
+        </table>
+        ${snapshot.empty ? `<p class="empty-state">No payments submitted yet.</p>` : ""}
+      </div>
       <div class="card">
         <div class="card-title">Record Payment on Behalf of a Tenant</div>
         <div class="card-sub" style="margin-bottom:12px;">Use this when a tenant forwarded their M-Pesa confirmation (e.g. via WhatsApp) instead of submitting it themselves through the app. Paste the exact message text below — it's parsed and counted toward commission the same as any tenant-submitted payment.</div>
@@ -376,6 +536,8 @@ function renderPaymentsTab() {
       });
     }
   });
+
+  activeListeners.push(unsubscribe);
 }
 
 // ---------------------------------------------------------------------
@@ -471,7 +633,16 @@ function maintenanceStatusPill(status) {
 }
 
 async function renderTenantProfile(tenantId) {
-  const tenantDoc = tenantsCache.find((d) => d.id === tenantId) || await db.collection("tenants").doc(tenantId).get();
+  const cachedDoc = tenantsCache.find((d) => d.id === tenantId);
+  const tenantDoc = cachedDoc || await db.collection("tenants").doc(tenantId).get();
+
+  // Bug fix: a doc fetched directly via .get() (i.e. not in the cache)
+  // can come back non-existent — reading .data() on it used to throw.
+  if (!tenantDoc.exists) {
+    contentBox.innerHTML = `<p class="empty-state">This tenant could not be found. They may have been removed.</p>`;
+    return;
+  }
+
   const t = tenantDoc.data();
   const unitDoc = t.unitId ? unitsCache.find((d) => d.id === t.unitId) : null;
 
@@ -486,13 +657,13 @@ async function renderTenantProfile(tenantId) {
   const depositHTML = depositSnap.empty ? `<p class="card-sub">No deposit on record.</p>` : (() => {
     const d = depositSnap.docs[0].data();
     const refunded = d.status === "refunded";
-    return `<div class="card-sub">KSh ${Number(d.amountPaid || 0).toLocaleString()} paid on ${d.paidAt || ""}</div>
+    return `<div class="card-sub">${money(d.amountPaid)} paid on ${d.paidAt || ""}</div>
       <div style="margin-top:6px;"><span class="pill ${refunded ? "pill-verified" : "pill-pending"}">${refunded ? "Refunded" : "Held"}</span></div>`;
   })();
 
   const paymentsHTML = paymentsSnap.empty ? `<p class="empty-state">No payments yet.</p>` : paymentsSnap.docs.map((doc) => {
     const p = doc.data();
-    return `<div class="payment-row"><div><div class="amount">KSh ${Number(p.amount || 0).toLocaleString()}</div><div class="meta">${p.paidAtRaw || ""}</div></div><span class="pill pill-${p.status}">${p.status}</span></div>`;
+    return `<div class="payment-row"><div><div class="amount">${money(p.amount)}</div><div class="meta">${p.paidAtRaw || ""}</div></div><span class="pill pill-${p.status}">${p.status}</span></div>`;
   }).join("");
 
   const maintenanceHTML = maintenanceSnap.empty ? `<p class="empty-state">No maintenance requests.</p>` : maintenanceSnap.docs.map((doc) => {
@@ -592,9 +763,6 @@ function renderLandlordsTab() {
     const l = doc.data();
     return { id: doc.id, name: l.name || "", detail: landlordMethodDetail(l), contact: l.contact || "—" };
   });
-
-  const landlordOptions = landlordsCache.map((doc) => `<option value="${doc.id}">${doc.data().name}</option>`).join("");
-  void landlordOptions; // reserved for future cross-links from this tab
 
   contentBox.innerHTML = `
     <div class="table-toolbar">
@@ -792,7 +960,7 @@ function renderUnitsTab() {
           <div>
             <div class="card-title">${u.houseNumber} ${u.unitType ? "&middot; " + escapeHTML(u.unitType) : ""}</div>
             <div class="card-sub">${u.propertyName || ""} &middot; ${landlordName(u.landlordId)}</div>
-            <div class="card-sub">Rent: KSh ${Number(u.rentAmount || 0).toLocaleString()}</div>
+            <div class="card-sub">Rent: ${money(u.rentAmount)}</div>
             <div class="card-sub">Water Meter: ${u.waterMeterNumber || "—"} &middot; Power Meter: ${u.powerMeterNumber || "—"}</div>
           </div>
           <span class="pill ${vacant ? "pill-rejected" : "pill-verified"}" data-toggle-occupancy="${doc.id}" style="cursor:pointer;">${vacant ? "Vacant" : "Occupied"}</span>
@@ -857,7 +1025,7 @@ function renderUnitsTab() {
 // DEPOSITS TAB
 // ---------------------------------------------------------------------
 function renderDepositsTab() {
-  db.collection("deposits").orderBy("paidAt", "desc").onSnapshot((snapshot) => {
+  const unsubscribe = db.collection("deposits").orderBy("paidAt", "desc").onSnapshot((snapshot) => {
     if (activeTab !== "deposits") return;
 
     const rows = snapshot.empty ? `<p class="empty-state">No deposits recorded yet.</p>` : snapshot.docs.map((doc) => {
@@ -866,8 +1034,8 @@ function renderDepositsTab() {
       return `
         <div class="card">
           <div class="card-title">${escapeHTML(d.tenantName)} &middot; ${unitLabel(d.unitId)}</div>
-          <div class="card-sub">Paid: KSh ${Number(d.amountPaid || 0).toLocaleString()} on ${d.paidAt || ""}</div>
-          ${refunded ? `<div class="card-sub">Refunded: KSh ${Number(d.amountRefundable || 0).toLocaleString()} (deductions: KSh ${Number(d.deductions || 0).toLocaleString()})</div>` : ""}
+          <div class="card-sub">Paid: ${money(d.amountPaid)} on ${d.paidAt || ""}</div>
+          ${refunded ? `<div class="card-sub">Refunded: ${money(d.amountRefundable)} (deductions: ${money(d.deductions)})</div>` : ""}
           <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
             <span class="pill ${refunded ? "pill-verified" : "pill-pending"}">${refunded ? "Refunded" : "Held"}</span>
             ${!refunded ? `<button class="btn btn-outline" style="width:auto; padding:8px 16px; font-size:13px;" data-action="refund" data-id="${doc.id}">Process Refund</button>` : ""}
@@ -928,6 +1096,8 @@ function renderDepositsTab() {
       });
     });
   });
+
+  activeListeners.push(unsubscribe);
 }
 
 // ---------------------------------------------------------------------
@@ -1024,10 +1194,10 @@ async function showCommissionStatement() {
     statements.map((s) => `
       <div style="padding:12px 0; border-bottom:1px solid var(--border);">
         <div style="font-weight:700; margin-bottom:6px;">${escapeHTML(s.name)}</div>
-        <div class="payment-row"><div>Rent Collected</div><span>KSh ${s.collected.toLocaleString()}</span></div>
-        <div class="payment-row"><div>Commission (${(config.commissionRate * 100).toFixed(1)}%)</div><span>KSh ${s.commission.toLocaleString()}</span></div>
-        <div class="payment-row"><div>Cleaning Fee</div><span>KSh ${s.cleaningFee.toLocaleString()}</span></div>
-        <div class="payment-row"><div><strong>Amount Due to Landlord</strong></div><span><strong>KSh ${s.dueToLandlord.toLocaleString()}</strong></span></div>
+        <div class="payment-row"><div>Rent Collected</div><span>${money(s.collected)}</span></div>
+        <div class="payment-row"><div>Commission (${(config.commissionRate * 100).toFixed(1)}%)</div><span>${money(s.commission)}</span></div>
+        <div class="payment-row"><div>Cleaning Fee</div><span>${money(s.cleaningFee)}</span></div>
+        <div class="payment-row"><div><strong>Amount Due to Landlord</strong></div><span><strong>${money(s.dueToLandlord)}</strong></span></div>
       </div>`).join("") + `</div>`;
 }
 
@@ -1070,8 +1240,17 @@ async function showArrears() {
 
   output.innerHTML = `<div class="card"><div class="card-title">Arrears &mdash; ${overdue.length} unit(s) overdue this month</div>` +
     (overdue.length === 0 ? `<p class="empty-state">Everyone's paid up!</p>` :
-      overdue.map((u) => `<div class="payment-row"><div>${u.data().houseNumber} &middot; ${landlordName(u.data().landlordId)}</div><span>KSh ${Number(u.data().rentAmount || 0).toLocaleString()}</span></div>`).join("")
+      overdue.map((u) => `<div class="payment-row"><div>${u.data().houseNumber} &middot; ${landlordName(u.data().landlordId)}</div><span>${money(u.data().rentAmount)}</span></div>`).join("")
     ) + `</div>`;
+}
+
+// Bug fix: values (unit names, landlord names, transaction codes) were
+// dropped into the CSV unquoted. A comma inside any of those fields
+// used to silently shift every column after it. Each field is now
+// quoted and internal quotes are escaped per the CSV spec.
+function csvField(value) {
+  const str = String(value == null ? "" : value);
+  return `"${str.replace(/"/g, '""')}"`;
 }
 
 async function exportCSV() {
@@ -1081,9 +1260,17 @@ async function exportCSV() {
     .filter((d) => !landlordId || d.data().landlordId === landlordId)
     .map((d) => {
       const p = d.data();
-      return [p.transactionCode, p.amount, unitLabel(p.unitId), landlordName(p.landlordId), p.method, p.paidAtRaw].join(",");
+      return [
+        csvField(p.transactionCode),
+        csvField(p.amount),
+        csvField(unitLabel(p.unitId)),
+        csvField(landlordName(p.landlordId)),
+        csvField(p.method),
+        csvField(p.paidAtRaw)
+      ].join(",");
     });
-  const csv = "Transaction Code,Amount,Unit,Landlord,Method,Paid At\n" + rows.join("\n");
+  const header = ["Transaction Code", "Amount", "Unit", "Landlord", "Method", "Paid At"].map(csvField).join(",");
+  const csv = header + "\n" + rows.join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
