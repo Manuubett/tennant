@@ -150,6 +150,58 @@ a { text-decoration: none; color: inherit; }
 }
 .fab:hover { transform: translateY(-2px); box-shadow: 0 14px 28px rgba(230,0,126,.4); }
 
+/* ---------- Header icon button + notifications panel ---------- */
+.header-actions { display: flex; align-items: center; gap: 10px; }
+.icon-btn {
+    position: relative; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18);
+    color: #fff; width: 36px; height: 36px; border-radius: var(--radius-sm); cursor: pointer;
+    font-size: 16px; display: flex; align-items: center; justify-content: center;
+    transition: background .15s ease;
+}
+.icon-btn:hover { background: rgba(255,255,255,.16); }
+.bell-badge {
+    position: absolute; top: -5px; right: -5px; background: var(--pink); color: #fff;
+    font-size: 10px; font-weight: 700; min-width: 16px; height: 16px; border-radius: 999px;
+    display: flex; align-items: center; justify-content: center; padding: 0 3px; border: 2px solid var(--ink);
+}
+.notif-panel {
+    display: none; position: absolute; top: 56px; right: 16px; width: 320px; max-width: calc(100vw - 32px);
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+    box-shadow: 0 20px 40px rgba(16,35,63,.18); max-height: 380px; overflow-y: auto; z-index: 40;
+}
+.notif-panel.open { display: block; }
+.notif-row { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.notif-row:last-child { border-bottom: none; }
+.notif-row.unread { background: var(--pink-tint); }
+.notif-row .notif-msg { font-size: 13px; color: var(--ink); line-height: 1.4; }
+.notif-row .notif-time { font-size: 11px; color: var(--ink-faint); margin-top: 3px; }
+
+/* ---------- Rent status summary (tenant portal) ---------- */
+.rent-status-amount { font-family: var(--font-mono); font-size: 30px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.rent-status-due { font-size: 13px; color: var(--ink-soft); margin-top: 2px; }
+.rent-status-card.is-overdue { border-left: 3px solid var(--red); }
+.rent-status-card.is-due { border-left: 3px solid var(--amber); }
+.rent-status-card.is-paid { border-left: 3px solid var(--green); }
+
+/* ---------- Arrears badge (staff tenants tab) ---------- */
+.badge-arrears { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--red); background: var(--red-tint); padding: 4px 10px; border-radius: 999px; }
+
+/* ---------- Category chip (maintenance) ---------- */
+.chip { display: inline-block; font-size: 11px; font-weight: 600; color: var(--ink-soft); background: var(--bg); border: 1px solid var(--border); padding: 3px 9px; border-radius: 999px; }
+
+/* ---------- Receipt (printable popup) ---------- */
+.receipt-page { max-width: 420px; margin: 32px auto; font-family: var(--font-sans); color: var(--ink); padding: 0 16px; }
+.receipt-card { background: #fff; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 28px 26px; }
+.receipt-brand { font-weight: 800; font-size: 18px; color: var(--pink); margin-bottom: 2px; }
+.receipt-sub { font-size: 12.5px; color: var(--ink-soft); margin-bottom: 20px; }
+.receipt-row { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.receipt-row:last-of-type { border-bottom: none; }
+.receipt-row .label { color: var(--ink-soft); }
+.receipt-row .value { font-weight: 600; font-family: var(--font-mono); }
+.receipt-total { display: flex; justify-content: space-between; padding-top: 14px; margin-top: 6px; border-top: 2px solid var(--ink); font-size: 16px; font-weight: 800; font-family: var(--font-mono); }
+.receipt-print-btn { margin-top: 22px; }
+@media print { .receipt-print-btn { display: none; } body { background: #fff; } }
+
 /* ---------- Desktop ---------- */
 @media (min-width: 900px) {
     .app-container { max-width: 960px; padding: 32px 24px 56px; }
