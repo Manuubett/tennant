@@ -10,11 +10,19 @@
 
 <header class="app-header">
   <h1 id="tenant-header">My Rent</h1>
-  <button class="logout-btn" id="logout-btn">Log Out</button>
+  <div class="header-actions">
+    <button class="icon-btn" id="notif-btn" aria-label="Notifications">&#128276;</button>
+    <button class="logout-btn" id="logout-btn">Log Out</button>
+  </div>
+  <div class="notif-panel" id="notif-panel"></div>
 </header>
 
 <div class="app-container">
   <div id="pending-notice"></div>
+
+  <div id="rent-status-card"></div>
+
+  <div id="lease-deposit-card"></div>
 
   <div class="card">
     <div class="card-title">Submit a Payment</div>
@@ -33,6 +41,35 @@
   <div class="card" id="history-card">
     <p class="empty-state">Loading&hellip;</p>
   </div>
+
+  <h3 style="margin-bottom:8px;">Maintenance Requests</h3>
+  <div id="maintenance-list">
+    <p class="empty-state">Loading&hellip;</p>
+  </div>
+  <div class="card">
+    <div class="card-title">Report an Issue</div>
+    <div class="card-sub" style="margin-bottom:14px;">Let the office know about a repair or maintenance issue in your unit.</div>
+    <form id="maintenance-form">
+      <div class="field">
+        <label>Category</label>
+        <select name="category" required>
+          <option value="Plumbing">Plumbing</option>
+          <option value="Electrical">Electrical</option>
+          <option value="Structural">Structural</option>
+          <option value="Appliance">Appliance</option>
+          <option value="Pest Control">Pest Control</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <textarea name="description" placeholder="Describe the issue..." required></textarea>
+      </div>
+      <button type="submit" class="btn btn-outline" id="submit-maintenance-btn">Submit Request</button>
+      <p class="alert alert-error" id="maintenance-error" style="display:none;"></p>
+      <p class="alert alert-success" id="maintenance-success" style="display:none;"></p>
+    </form>
+  </div>
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
@@ -41,6 +78,7 @@
 <script src="firebase-config.js"></script>
 <script src="auth-role.js"></script>
 <script src="mpesa-parser.js"></script>
+<script src="notifications.js"></script>
 <script src="portal.js"></script>
 </body>
 </html>
