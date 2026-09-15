@@ -13,9 +13,12 @@ document.getElementById("logout-btn").addEventListener("click", () => auth.signO
 let activeTab = "payments";
 let landlordsCache = [];
 let unitsCache = [];
+let tenantsCache = [];
+let viewingTenantId = null;
 
 const TABS = [
   { key: "payments", label: "Payments" },
+  { key: "tenants", label: "Tenants" },
   { key: "landlords", label: "Landlords" },
   { key: "units", label: "Units" },
   { key: "deposits", label: "Deposits" },
@@ -30,6 +33,7 @@ function renderTabs() {
   tabsBox.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       activeTab = btn.dataset.tab;
+      viewingTenantId = null;
       renderTabs();
       renderActiveTab();
     });
@@ -37,12 +41,14 @@ function renderTabs() {
 }
 
 async function refreshCaches() {
-  const [landlordSnap, unitSnap] = await Promise.all([
+  const [landlordSnap, unitSnap, tenantSnap] = await Promise.all([
     db.collection("landlords").orderBy("name").get(),
-    db.collection("units").get()
+    db.collection("units").get(),
+    db.collection("tenants").orderBy("name").get()
   ]);
   landlordsCache = landlordSnap.docs;
   unitsCache = unitSnap.docs;
+  tenantsCache = tenantSnap.docs;
 }
 
 function landlordName(id) {
@@ -53,11 +59,38 @@ function unitLabel(id) {
   const doc = unitsCache.find((d) => d.id === id);
   return doc ? doc.data().houseNumber : "Unknown unit";
 }
+function currentMonthRange() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return { start, end };
+}
+async function getPaidUnitIdsThisMonth() {
+  const { start, end } = currentMonthRange();
+  const snap = await db.collection("payments")
+    .where("status", "==", "verified")
+    .where("submittedAt", ">=", start)
+    .where("submittedAt", "<", end)
+    .get();
+  return new Set(snap.docs.map((d) => d.data().unitId));
+}
+function isOverdue(tenant, paidUnitIds) {
+  if (!tenant.unitId || paidUnitIds.has(tenant.unitId)) return false;
+  if (tenant.leaseStartDate) {
+    const leaseStart = new Date(tenant.leaseStartDate);
+    if (!isNaN(leaseStart) && leaseStart > new Date()) return false;
+  }
+  const dueDay = Number(tenant.rentDueDay) || 5;
+  const now = new Date();
+  const dueDate = new Date(now.getFullYear(), now.getMonth(), dueDay);
+  return now > dueDate;
+}
 
 async function renderActiveTab() {
   contentBox.innerHTML = `<p class="empty-state">Loading&hellip;</p>`;
   await refreshCaches();
   if (activeTab === "payments") renderPaymentsTab();
+  else if (activeTab === "tenants") renderTenantsTab();
   else if (activeTab === "landlords") renderLandlordsTab();
   else if (activeTab === "units") renderUnitsTab();
   else if (activeTab === "deposits") renderDepositsTab();
@@ -117,9 +150,14 @@ function renderPaymentsTab() {
       btn.addEventListener("click", async () => {
         const id = btn.dataset.id;
         const status = btn.dataset.action === "verify" ? "verified" : "rejected";
+        const paymentDoc = snapshot.docs.find((d) => d.id === id);
         btn.disabled = true;
         try {
           await db.collection("payments").doc(id).update({ status });
+          if (status === "verified" && paymentDoc && paymentDoc.data().tenantId) {
+            const amt = Number(paymentDoc.data().amount || 0).toLocaleString();
+            addNotification(paymentDoc.data().tenantId, "payment_verified", `Your payment of KSh ${amt} has been verified.`);
+          }
         } catch (err) {
           alert("Couldn't update: " + err.message);
           btn.disabled = false;
@@ -182,6 +220,158 @@ function renderPaymentsTab() {
         }
       });
     }
+  });
+}
+
+// ---------------------------------------------------------------------
+// TENANTS TAB (list + profile view)
+// ---------------------------------------------------------------------
+async function renderTenantsTab() {
+  if (viewingTenantId) {
+    renderTenantProfile(viewingTenantId);
+    return;
+  }
+
+  const paidUnitIds = await getPaidUnitIdsThisMonth();
+  if (activeTab !== "tenants" || viewingTenantId) return;
+
+  const rows = tenantsCache.map((doc) => {
+    const t = doc.data();
+    const overdue = isOverdue(t, paidUnitIds);
+    return `
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+          <div>
+            <div class="card-title">${escapeHTML(t.name || "")}</div>
+            <div class="card-sub">${t.unitId ? unitLabel(t.unitId) : "No unit assigned"} ${t.landlordId ? "&middot; " + escapeHTML(landlordName(t.landlordId)) : ""}</div>
+          </div>
+          <div style="text-align:right; display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+            <span class="pill ${t.status === "pending" ? "pill-pending" : "pill-verified"}">${t.status || "active"}</span>
+            ${overdue ? `<span class="badge-arrears">Arrears</span>` : ""}
+          </div>
+        </div>
+        <button class="btn btn-outline" style="width:auto; padding:8px 16px; font-size:13px; margin-top:12px;" data-view-tenant="${doc.id}">View Profile</button>
+      </div>`;
+  }).join("") || `<p class="empty-state">No tenants registered yet.</p>`;
+
+  contentBox.innerHTML = rows;
+  contentBox.querySelectorAll("[data-view-tenant]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      viewingTenantId = btn.dataset.viewTenant;
+      renderTenantsTab();
+    });
+  });
+}
+
+function maintenanceStatusPill(status) {
+  const map = { open: "pill-pending", in_progress: "pill-pending", resolved: "pill-verified" };
+  const label = { open: "Open", in_progress: "In Progress", resolved: "Resolved" };
+  return `<span class="pill ${map[status] || "pill-pending"}">${label[status] || status}</span>`;
+}
+
+async function renderTenantProfile(tenantId) {
+  const tenantDoc = tenantsCache.find((d) => d.id === tenantId) || await db.collection("tenants").doc(tenantId).get();
+  const t = tenantDoc.data();
+  const unitDoc = t.unitId ? unitsCache.find((d) => d.id === t.unitId) : null;
+
+  const [depositSnap, paymentsSnap, maintenanceSnap] = await Promise.all([
+    t.unitId ? db.collection("deposits").where("unitId", "==", t.unitId).orderBy("paidAt", "desc").limit(1).get() : Promise.resolve({ empty: true, docs: [] }),
+    db.collection("payments").where("tenantId", "==", tenantId).orderBy("submittedAt", "desc").limit(15).get(),
+    db.collection("maintenanceRequests").where("tenantId", "==", tenantId).orderBy("submittedAt", "desc").get()
+  ]);
+
+  if (activeTab !== "tenants" || viewingTenantId !== tenantId) return;
+
+  const depositHTML = depositSnap.empty ? `<p class="card-sub">No deposit on record.</p>` : (() => {
+    const d = depositSnap.docs[0].data();
+    const refunded = d.status === "refunded";
+    return `<div class="card-sub">KSh ${Number(d.amountPaid || 0).toLocaleString()} paid on ${d.paidAt || ""}</div>
+      <div style="margin-top:6px;"><span class="pill ${refunded ? "pill-verified" : "pill-pending"}">${refunded ? "Refunded" : "Held"}</span></div>`;
+  })();
+
+  const paymentsHTML = paymentsSnap.empty ? `<p class="empty-state">No payments yet.</p>` : paymentsSnap.docs.map((doc) => {
+    const p = doc.data();
+    return `<div class="payment-row"><div><div class="amount">KSh ${Number(p.amount || 0).toLocaleString()}</div><div class="meta">${p.paidAtRaw || ""}</div></div><span class="pill pill-${p.status}">${p.status}</span></div>`;
+  }).join("");
+
+  const maintenanceHTML = maintenanceSnap.empty ? `<p class="empty-state">No maintenance requests.</p>` : maintenanceSnap.docs.map((doc) => {
+    const m = doc.data();
+    const actions = m.status !== "resolved" ? `
+      ${m.status === "open" ? `<button class="btn btn-outline" style="width:auto; padding:7px 14px; font-size:12.5px;" data-mtn-action="in_progress" data-mtn-id="${doc.id}">Mark In Progress</button>` : ""}
+      <button class="btn btn-primary" style="width:auto; padding:7px 14px; font-size:12.5px;" data-mtn-action="resolved" data-mtn-id="${doc.id}">Mark Resolved</button>` : "";
+    return `
+      <div class="card">
+        <span class="chip">${escapeHTML(m.category || "Other")}</span>
+        <div class="card-sub" style="margin-top:8px;">${escapeHTML(m.description || "")}</div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
+          ${maintenanceStatusPill(m.status)}
+          <div style="display:flex; gap:6px;">${actions}</div>
+        </div>
+      </div>`;
+  }).join("");
+
+  contentBox.innerHTML = `
+    <button class="btn-link" id="back-to-tenants" style="margin-bottom:14px;">&larr; Back to Tenants</button>
+    <div class="card">
+      <div class="card-title">${escapeHTML(t.name || "")}</div>
+      <div class="card-sub">${unitDoc ? escapeHTML(unitDoc.data().houseNumber) : "No unit assigned"} ${t.landlordId ? "&middot; " + escapeHTML(landlordName(t.landlordId)) : ""}</div>
+      <form id="lease-form" style="margin-top:14px;">
+        <div class="field"><label>Lease Start Date</label><input type="date" name="leaseStartDate" value="${t.leaseStartDate || ""}"></div>
+        <div class="field"><label>Rent Due Day (day of month)</label><input type="number" name="rentDueDay" min="1" max="28" value="${t.rentDueDay || 5}"></div>
+        <button type="submit" class="btn btn-outline">Save Lease Info</button>
+        <p class="alert alert-success" id="lease-save-success" style="display:none;">Saved.</p>
+      </form>
+    </div>
+    <div class="card">
+      <div class="card-title">Deposit</div>
+      ${depositHTML}
+    </div>
+    <h3 style="margin-bottom:8px;">Payment History</h3>
+    <div class="card">${paymentsHTML}</div>
+    <h3 style="margin-bottom:8px;">Maintenance Requests</h3>
+    ${maintenanceHTML}`;
+
+  document.getElementById("back-to-tenants").addEventListener("click", () => {
+    viewingTenantId = null;
+    renderTenantsTab();
+  });
+
+  document.getElementById("lease-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = new FormData(e.target);
+    try {
+      await db.collection("tenants").doc(tenantId).update({
+        leaseStartDate: data.get("leaseStartDate") || null,
+        rentDueDay: Number(data.get("rentDueDay")) || 5
+      });
+      document.getElementById("lease-save-success").style.display = "block";
+    } catch (err) {
+      alert("Couldn't save: " + err.message);
+    }
+  });
+
+  contentBox.querySelectorAll("[data-mtn-action]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.mtnId;
+      const status = btn.dataset.mtnAction;
+      let staffNote = "";
+      if (status === "resolved") {
+        staffNote = prompt("Add a note for the tenant (optional):", "") || "";
+      }
+      btn.disabled = true;
+      try {
+        await db.collection("maintenanceRequests").doc(id).update({
+          status,
+          staffNote: staffNote || null,
+          resolvedAt: status === "resolved" ? firebase.firestore.FieldValue.serverTimestamp() : null
+        });
+        addNotification(tenantId, "maintenance_update", `Your maintenance request is now ${status === "in_progress" ? "in progress" : "resolved"}.`);
+        renderTenantProfile(tenantId);
+      } catch (err) {
+        alert("Couldn't update: " + err.message);
+        btn.disabled = false;
+      }
+    });
   });
 }
 
@@ -514,13 +704,6 @@ async function showCommissionStatement() {
       </div>`).join("") + `</div>`;
 }
 
-function currentMonthRange() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  return { start, end };
-}
-
 async function showRentRoll() {
   const output = document.getElementById("report-output");
   output.innerHTML = `<p class="empty-state">Loading&hellip;</p>`;
@@ -595,12 +778,23 @@ auth.onAuthStateChanged(async (user) => {
     return;
   }
 
-  const pendingCount = (await db.collection("payments").where("status", "==", "pending").get()).size;
-  const tenantCount = (await db.collection("tenants").get()).size;
+  const [pendingSnap, tenantSnap, paidUnitIds] = await Promise.all([
+    db.collection("payments").where("status", "==", "pending").get(),
+    db.collection("tenants").get(),
+    getPaidUnitIdsThisMonth()
+  ]);
+  const overdueCount = tenantSnap.docs.filter((d) => isOverdue(d.data(), paidUnitIds)).length;
+
   statRow.innerHTML = `
-    <div class="stat-box"><div class="num">${pendingCount}</div><div class="label">Pending Payments</div></div>
-    <div class="stat-box"><div class="num">${tenantCount}</div><div class="label">Total Tenants</div></div>`;
+    <div class="stat-box"><div class="num">${pendingSnap.size}</div><div class="label">Pending Payments</div></div>
+    <div class="stat-box"><div class="num">${tenantSnap.size}</div><div class="label">Total Tenants</div></div>
+    <div class="stat-box"><div class="num">${overdueCount}</div><div class="label">Overdue This Month</div></div>`;
 
   renderTabs();
   renderActiveTab();
+
+  const notifBtn = document.getElementById("notif-btn");
+  const notifPanel = document.getElementById("notif-panel");
+  wireNotificationToggle(notifBtn, notifPanel);
+  attachNotificationBell(notifBtn, notifPanel, "staff");
 });
