@@ -379,7 +379,7 @@ function renderPaymentsTab() {
 }
 
 // ---------------------------------------------------------------------
-// TENANTS TAB (list + profile view)
+// TENANTS TAB (searchable table + profile view)
 // ---------------------------------------------------------------------
 async function renderTenantsTab() {
   if (viewingTenantId) {
@@ -390,32 +390,78 @@ async function renderTenantsTab() {
   const paidUnitIds = await getPaidUnitIdsThisMonth();
   if (activeTab !== "tenants" || viewingTenantId) return;
 
-  const rows = tenantsCache.map((doc) => {
+  const rowsData = tenantsCache.map((doc) => {
     const t = doc.data();
-    const overdue = isOverdue(t, paidUnitIds);
-    return `
-      <div class="card">
-        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
-          <div>
-            <div class="card-title">${escapeHTML(t.name || "")}</div>
-            <div class="card-sub">${t.unitId ? unitLabel(t.unitId) : "No unit assigned"} ${t.landlordId ? "&middot; " + escapeHTML(landlordName(t.landlordId)) : ""}</div>
-          </div>
-          <div style="text-align:right; display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
-            <span class="pill ${t.status === "pending" ? "pill-pending" : "pill-verified"}">${t.status || "active"}</span>
-            ${overdue ? `<span class="badge-arrears">Arrears</span>` : ""}
-          </div>
-        </div>
-        <button class="btn btn-outline" style="width:auto; padding:8px 16px; font-size:13px; margin-top:12px;" data-view-tenant="${doc.id}">View Profile</button>
-      </div>`;
-  }).join("") || `<p class="empty-state">No tenants registered yet.</p>`;
-
-  contentBox.innerHTML = rows;
-  contentBox.querySelectorAll("[data-view-tenant]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      viewingTenantId = btn.dataset.viewTenant;
-      renderTenantsTab();
-    });
+    return {
+      id: doc.id,
+      name: t.name || "",
+      unit: t.unitId ? unitLabel(t.unitId) : "No unit assigned",
+      landlord: t.landlordId ? landlordName(t.landlordId) : "—",
+      status: t.status || "active",
+      overdue: isOverdue(t, paidUnitIds)
+    };
   });
+
+  contentBox.innerHTML = `
+    <div class="table-toolbar">
+      <div class="table-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="tenant-search" placeholder="Search tenants by name, unit or landlord&hellip;">
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr><th>Tenant</th><th>Unit</th><th>Landlord</th><th>Status</th><th>Arrears</th><th></th></tr>
+        </thead>
+        <tbody id="tenants-tbody"></tbody>
+      </table>
+      <p class="empty-state" id="tenants-empty" style="display:none;">No tenants match your search.</p>
+    </div>`;
+
+  const tbody = document.getElementById("tenants-tbody");
+  const emptyState = document.getElementById("tenants-empty");
+
+  function paintRows(filter) {
+    const q = (filter || "").trim().toLowerCase();
+    const filtered = !q ? rowsData : rowsData.filter((r) =>
+      r.name.toLowerCase().includes(q) || r.unit.toLowerCase().includes(q) || r.landlord.toLowerCase().includes(q)
+    );
+
+    if (rowsData.length === 0) {
+      tbody.innerHTML = "";
+      emptyState.style.display = "block";
+      emptyState.textContent = "No tenants registered yet.";
+      return;
+    }
+    if (filtered.length === 0) {
+      tbody.innerHTML = "";
+      emptyState.style.display = "block";
+      emptyState.textContent = "No tenants match your search.";
+      return;
+    }
+    emptyState.style.display = "none";
+
+    tbody.innerHTML = filtered.map((r) => `
+      <tr>
+        <td data-label="Tenant"><div class="cell-title">${escapeHTML(r.name)}</div></td>
+        <td data-label="Unit">${escapeHTML(r.unit)}</td>
+        <td data-label="Landlord">${escapeHTML(r.landlord)}</td>
+        <td data-label="Status"><span class="pill ${r.status === "pending" ? "pill-pending" : "pill-verified"}">${escapeHTML(r.status)}</span></td>
+        <td data-label="Arrears">${r.overdue ? `<span class="badge-arrears">Arrears</span>` : `<span class="cell-muted">&mdash;</span>`}</td>
+        <td data-label="" class="table-actions"><button class="btn-table-action" data-view-tenant="${r.id}">View Details</button></td>
+      </tr>`).join("");
+
+    tbody.querySelectorAll("[data-view-tenant]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        viewingTenantId = btn.dataset.viewTenant;
+        renderTenantsTab();
+      });
+    });
+  }
+
+  paintRows("");
+  document.getElementById("tenant-search").addEventListener("input", (e) => paintRows(e.target.value));
 }
 
 function maintenanceStatusPill(status) {
@@ -531,26 +577,41 @@ async function renderTenantProfile(tenantId) {
 }
 
 // ---------------------------------------------------------------------
-// LANDLORDS TAB
+// LANDLORDS TAB (searchable table + edit/delete + add form)
 // ---------------------------------------------------------------------
+let editingLandlordId = null;
+
+function landlordMethodDetail(l) {
+  return l.paymentMethod === "paybill" ? `Paybill ${l.paybillNumber || ""} (Acc: ${l.accountHint || "any"})`
+    : l.paymentMethod === "till" ? `Till ${l.tillNumber || ""} (${l.businessName || ""})`
+    : `Phone ${l.phoneNumber || ""} (${l.registeredName || ""})`;
+}
+
 function renderLandlordsTab() {
-  const rows = landlordsCache.map((doc) => {
+  const rowsData = landlordsCache.map((doc) => {
     const l = doc.data();
-    const detail = l.paymentMethod === "paybill" ? `Paybill ${l.paybillNumber || ""} (Acc: ${l.accountHint || "any"})`
-      : l.paymentMethod === "till" ? `Till ${l.tillNumber || ""} (${l.businessName || ""})`
-      : `Phone ${l.phoneNumber || ""} (${l.registeredName || ""})`;
-    return `
-      <div class="card">
-        <div class="card-title">${l.name}</div>
-        <div class="card-sub">${detail}</div>
-        <div class="card-sub">${l.contact || ""}</div>
-      </div>`;
-  }).join("") || `<p class="empty-state">No landlords added yet.</p>`;
+    return { id: doc.id, name: l.name || "", detail: landlordMethodDetail(l), contact: l.contact || "—" };
+  });
+
+  const landlordOptions = landlordsCache.map((doc) => `<option value="${doc.id}">${doc.data().name}</option>`).join("");
+  void landlordOptions; // reserved for future cross-links from this tab
 
   contentBox.innerHTML = `
-    ${rows}
+    <div class="table-toolbar">
+      <div class="table-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="landlord-search" placeholder="Search landlords by name or contact&hellip;">
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Landlord</th><th>Payment Details</th><th>Contact</th><th></th></tr></thead>
+        <tbody id="landlords-tbody"></tbody>
+      </table>
+      <p class="empty-state" id="landlords-empty" style="display:none;">No landlords match your search.</p>
+    </div>
     <div class="card">
-      <div class="card-title">Add Landlord</div>
+      <div class="card-title" id="landlord-form-title">Add Landlord</div>
       <form id="landlord-form" style="margin-top:12px;">
         <div class="field"><label>Name</label><input type="text" name="name" required></div>
         <div class="field"><label>Contact</label><input type="text" name="contact"></div>
@@ -574,35 +635,146 @@ function renderLandlordsTab() {
           <div class="field"><label>Phone Number</label><input type="text" name="phoneNumber"></div>
           <div class="field"><label>Registered M-Pesa Name</label><input type="text" name="registeredName"></div>
         </div>
-        <button type="submit" class="btn btn-primary">Add Landlord</button>
+        <div style="display:flex; gap:10px;">
+          <button type="submit" class="btn btn-primary" id="landlord-form-submit">Add Landlord</button>
+          <button type="button" class="btn btn-outline" id="landlord-form-cancel" style="display:none;">Cancel</button>
+        </div>
       </form>
     </div>`;
 
+  const tbody = document.getElementById("landlords-tbody");
+  const emptyState = document.getElementById("landlords-empty");
+
+  function paintRows(filter) {
+    const q = (filter || "").trim().toLowerCase();
+    const filtered = !q ? rowsData : rowsData.filter((r) =>
+      r.name.toLowerCase().includes(q) || r.contact.toLowerCase().includes(q) || r.detail.toLowerCase().includes(q)
+    );
+
+    if (rowsData.length === 0) {
+      tbody.innerHTML = "";
+      emptyState.style.display = "block";
+      emptyState.textContent = "No landlords added yet.";
+      return;
+    }
+    if (filtered.length === 0) {
+      tbody.innerHTML = "";
+      emptyState.style.display = "block";
+      emptyState.textContent = "No landlords match your search.";
+      return;
+    }
+    emptyState.style.display = "none";
+
+    tbody.innerHTML = filtered.map((r) => `
+      <tr>
+        <td data-label="Landlord"><div class="cell-title">${escapeHTML(r.name)}</div></td>
+        <td data-label="Payment Details">${escapeHTML(r.detail)}</td>
+        <td data-label="Contact">${escapeHTML(r.contact)}</td>
+        <td data-label="" class="table-actions">
+          <button class="btn-table-action" data-view-landlord="${r.id}">View Details</button>
+          <button class="btn-table-action" data-edit-landlord="${r.id}">Edit</button>
+          <button class="btn-table-action btn-table-action-danger" data-delete-landlord="${r.id}">Delete</button>
+        </td>
+      </tr>`).join("");
+
+    tbody.querySelectorAll("[data-view-landlord]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const doc = landlordsCache.find((d) => d.id === btn.dataset.viewLandlord);
+        if (!doc) return;
+        const l = doc.data();
+        alert(`${l.name}\n\n${landlordMethodDetail(l)}\nContact: ${l.contact || "—"}`);
+      });
+    });
+
+    tbody.querySelectorAll("[data-edit-landlord]").forEach((btn) => {
+      btn.addEventListener("click", () => beginEditLandlord(btn.dataset.editLandlord));
+    });
+
+    tbody.querySelectorAll("[data-delete-landlord]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const doc = landlordsCache.find((d) => d.id === btn.dataset.deleteLandlord);
+        if (!doc) return;
+        if (!confirm(`Delete ${doc.data().name}? This can't be undone.`)) return;
+        try {
+          await db.collection("landlords").doc(btn.dataset.deleteLandlord).delete();
+          renderActiveTab();
+        } catch (err) {
+          alert("Couldn't delete: " + err.message);
+        }
+      });
+    });
+  }
+
+  paintRows("");
+  document.getElementById("landlord-search").addEventListener("input", (e) => paintRows(e.target.value));
+
   const methodSelect = document.getElementById("ll-method");
-  methodSelect.addEventListener("change", () => {
+  const form = document.getElementById("landlord-form");
+  const submitBtn = document.getElementById("landlord-form-submit");
+  const cancelBtn = document.getElementById("landlord-form-cancel");
+  const formTitle = document.getElementById("landlord-form-title");
+
+  function toggleMethodFields() {
     document.getElementById("ll-paybill-fields").style.display = methodSelect.value === "paybill" ? "block" : "none";
     document.getElementById("ll-till-fields").style.display = methodSelect.value === "till" ? "block" : "none";
     document.getElementById("ll-phone-fields").style.display = methodSelect.value === "phone" ? "block" : "none";
+  }
+  methodSelect.addEventListener("change", toggleMethodFields);
+
+  function beginEditLandlord(id) {
+    const doc = landlordsCache.find((d) => d.id === id);
+    if (!doc) return;
+    const l = doc.data();
+    editingLandlordId = id;
+    form.name.value = l.name || "";
+    form.contact.value = l.contact || "";
+    form.paymentMethod.value = l.paymentMethod || "paybill";
+    form.paybillNumber.value = l.paybillNumber || "";
+    form.accountHint.value = l.accountHint || "";
+    form.tillNumber.value = l.tillNumber || "";
+    form.businessName.value = l.businessName || "";
+    form.phoneNumber.value = l.phoneNumber || "";
+    form.registeredName.value = l.registeredName || "";
+    toggleMethodFields();
+    formTitle.textContent = `Edit ${l.name}`;
+    submitBtn.textContent = "Save Changes";
+    cancelBtn.style.display = "block";
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  cancelBtn.addEventListener("click", () => {
+    editingLandlordId = null;
+    form.reset();
+    toggleMethodFields();
+    formTitle.textContent = "Add Landlord";
+    submitBtn.textContent = "Add Landlord";
+    cancelBtn.style.display = "none";
   });
 
-  document.getElementById("landlord-form").addEventListener("submit", async (e) => {
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const data = new FormData(e.target);
+    const payload = {
+      name: data.get("name"),
+      contact: data.get("contact"),
+      paymentMethod: data.get("paymentMethod"),
+      paybillNumber: data.get("paybillNumber") || null,
+      accountHint: data.get("accountHint") || null,
+      tillNumber: data.get("tillNumber") || null,
+      businessName: data.get("businessName") || null,
+      phoneNumber: data.get("phoneNumber") || null,
+      registeredName: data.get("registeredName") || null
+    };
     try {
-      await db.collection("landlords").add({
-        name: data.get("name"),
-        contact: data.get("contact"),
-        paymentMethod: data.get("paymentMethod"),
-        paybillNumber: data.get("paybillNumber") || null,
-        accountHint: data.get("accountHint") || null,
-        tillNumber: data.get("tillNumber") || null,
-        businessName: data.get("businessName") || null,
-        phoneNumber: data.get("phoneNumber") || null,
-        registeredName: data.get("registeredName") || null
-      });
+      if (editingLandlordId) {
+        await db.collection("landlords").doc(editingLandlordId).update(payload);
+        editingLandlordId = null;
+      } else {
+        await db.collection("landlords").add(payload);
+      }
       renderActiveTab();
     } catch (err) {
-      alert("Couldn't add landlord: " + err.message);
+      alert("Couldn't save landlord: " + err.message);
     }
   });
 }
