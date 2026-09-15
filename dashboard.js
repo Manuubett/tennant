@@ -410,13 +410,13 @@ function generateOverviewPDF(data) {
 }
 
 // ---------------------------------------------------------------------
-// PAYMENTS TAB (table view)
+// PAYMENTS TAB (table view + Record Payment modal)
 // ---------------------------------------------------------------------
 function renderPaymentsTab() {
   const unsubscribe = db.collection("payments").orderBy("submittedAt", "desc").limit(100).onSnapshot((snapshot) => {
     if (activeTab !== "payments") return;
 
-    const rowsHTML = snapshot.empty ? "" : snapshot.docs.map((doc) => {
+    function paymentRowHTML(doc) {
       const p = doc.data();
       const mismatchBadge = p.recipientMatch === false
         ? `<span class="pill pill-mismatch">Mismatch</span>` : "";
@@ -436,105 +436,150 @@ function renderPaymentsTab() {
           <td data-label="Status"><span class="pill pill-${p.status}">${p.status}</span> ${mismatchBadge}${manualBadge}</td>
           <td data-label="" class="table-actions">${actions}</td>
         </tr>`;
-    }).join("");
+    }
 
+    const rowsHTML = snapshot.docs.map(paymentRowHTML).join("");
     const unitOptions = unitsCache.map((doc) => `<option value="${doc.id}" data-landlord="${doc.data().landlordId}">${escapeHTML(doc.data().houseNumber)} — ${escapeHTML(landlordName(doc.data().landlordId))}</option>`).join("");
 
     contentBox.innerHTML = `
+      <div class="table-toolbar">
+        <div class="table-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="payment-search" placeholder="Search by unit, landlord or reference&hellip;">
+        </div>
+        <button class="btn btn-primary" id="btn-open-record-payment" style="width:auto; padding:10px 18px; white-space:nowrap;">+ Record Payment</button>
+      </div>
       <div class="table-wrap">
         <table class="data-table">
           <thead>
             <tr><th>Amount</th><th>Unit</th><th>Landlord</th><th>Reference</th><th>Status</th><th></th></tr>
           </thead>
-          <tbody>${rowsHTML}</tbody>
+          <tbody id="payments-tbody">${rowsHTML}</tbody>
         </table>
-        ${snapshot.empty ? `<p class="empty-state">No payments submitted yet.</p>` : ""}
+        <p class="empty-state" id="payments-empty" style="display:${snapshot.empty ? "block" : "none"};">No payments submitted yet.</p>
       </div>
-      <div class="card">
-        <div class="card-title">Record Payment on Behalf of a Tenant</div>
-        <div class="card-sub" style="margin-bottom:12px;">Use this when a tenant forwarded their M-Pesa confirmation (e.g. via WhatsApp) instead of submitting it themselves through the app. Paste the exact message text below — it's parsed and counted toward commission the same as any tenant-submitted payment.</div>
-        <form id="manual-payment-form">
-          <div class="field"><label>Unit</label><select name="unitId" id="manual-unit-select" required>${unitOptions}</select></div>
-          <div class="field"><label>M-Pesa Message</label><textarea name="message" placeholder="Paste the full confirmation message here..." required></textarea></div>
-          <button type="submit" class="btn btn-outline">Record Payment</button>
-          <p class="alert alert-error" id="manual-payment-error" style="display:none;"></p>
-        </form>
+
+      <div class="modal-overlay" id="record-payment-modal">
+        <div class="modal-card">
+          <div class="modal-header">
+            <div class="card-title">Record Payment on Behalf of a Tenant</div>
+            <button class="modal-close" id="close-record-payment" aria-label="Close">&times;</button>
+          </div>
+          <div class="card-sub" style="margin-bottom:14px;">Use this when a tenant forwarded their M-Pesa confirmation (e.g. via WhatsApp) instead of submitting it themselves through the app. Paste the exact message text below — it's parsed and counted toward commission the same as any tenant-submitted payment.</div>
+          <form id="manual-payment-form">
+            <div class="field"><label>Unit</label><select name="unitId" id="manual-unit-select" required>${unitOptions}</select></div>
+            <div class="field"><label>M-Pesa Message</label><textarea name="message" placeholder="Paste the full confirmation message here..." required></textarea></div>
+            <button type="submit" class="btn btn-primary">Record Payment</button>
+            <p class="alert alert-error" id="manual-payment-error" style="display:none;"></p>
+          </form>
+        </div>
       </div>`;
 
-    contentBox.querySelectorAll("[data-action]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const id = btn.dataset.id;
-        const status = btn.dataset.action === "verify" ? "verified" : "rejected";
-        const paymentDoc = snapshot.docs.find((d) => d.id === id);
-        btn.disabled = true;
-        try {
-          await db.collection("payments").doc(id).update({ status });
-          if (status === "verified" && paymentDoc && paymentDoc.data().tenantId) {
-            const amt = Number(paymentDoc.data().amount || 0).toLocaleString();
-            addNotification(paymentDoc.data().tenantId, "payment_verified", `Your payment of KSh ${amt} has been verified.`);
-          }
-        } catch (err) {
-          alert("Couldn't update: " + err.message);
-          btn.disabled = false;
-        }
+    // --- Client-side search over the already-loaded rows ---
+    const tbody = document.getElementById("payments-tbody");
+    const emptyState = document.getElementById("payments-empty");
+
+    function paintRows(docs) {
+      tbody.innerHTML = docs.map(paymentRowHTML).join("");
+      emptyState.style.display = docs.length === 0 ? "block" : "none";
+      emptyState.textContent = snapshot.empty ? "No payments submitted yet." : "No payments match your search.";
+      wireRowActions();
+    }
+
+    document.getElementById("payment-search").addEventListener("input", (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      if (!q) { paintRows(snapshot.docs); return; }
+      const filteredDocs = snapshot.docs.filter((doc) => {
+        const p = doc.data();
+        return (unitLabel(p.unitId) || "").toLowerCase().includes(q)
+          || (landlordName(p.landlordId) || "").toLowerCase().includes(q)
+          || (p.transactionCode || "").toLowerCase().includes(q);
       });
+      paintRows(filteredDocs);
     });
+
+    // --- Modal open/close ---
+    const modal = document.getElementById("record-payment-modal");
+    document.getElementById("btn-open-record-payment").addEventListener("click", () => modal.classList.add("open"));
+    document.getElementById("close-record-payment").addEventListener("click", () => modal.classList.remove("open"));
+    modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.remove("open"); });
+
+    function wireRowActions() {
+      contentBox.querySelectorAll("[data-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.dataset.id;
+          const status = btn.dataset.action === "verify" ? "verified" : "rejected";
+          const paymentDoc = snapshot.docs.find((d) => d.id === id);
+          btn.disabled = true;
+          try {
+            await db.collection("payments").doc(id).update({ status });
+            if (status === "verified" && paymentDoc && paymentDoc.data().tenantId) {
+              const amt = Number(paymentDoc.data().amount || 0).toLocaleString();
+              addNotification(paymentDoc.data().tenantId, "payment_verified", `Your payment of KSh ${amt} has been verified.`);
+            }
+          } catch (err) {
+            alert("Couldn't update: " + err.message);
+            btn.disabled = false;
+          }
+        });
+      });
+    }
+    wireRowActions();
 
     const manualForm = document.getElementById("manual-payment-form");
     const manualError = document.getElementById("manual-payment-error");
-    if (manualForm) {
-      manualForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        manualError.style.display = "none";
+    manualForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      manualError.style.display = "none";
 
-        const data = new FormData(manualForm);
-        const unitId = data.get("unitId");
-        const rawMessage = data.get("message");
-        const unitDoc = unitsCache.find((d) => d.id === unitId);
-        const landlordId = unitDoc ? unitDoc.data().landlordId : null;
+      const data = new FormData(manualForm);
+      const unitId = data.get("unitId");
+      const rawMessage = data.get("message");
+      const unitDoc = unitsCache.find((d) => d.id === unitId);
+      const landlordId = unitDoc ? unitDoc.data().landlordId : null;
 
-        const parsed = parseMpesaMessage(rawMessage);
-        if (!parsed.success) {
-          manualError.textContent = parsed.error;
+      const parsed = parseMpesaMessage(rawMessage);
+      if (!parsed.success) {
+        manualError.textContent = parsed.error;
+        manualError.style.display = "block";
+        return;
+      }
+
+      try {
+        // Same duplicate check as the tenant portal — a message
+        // shouldn't be recorded twice regardless of who enters it.
+        const dupe = await db.collection("payments").where("transactionCode", "==", parsed.transactionCode).get();
+        if (!dupe.empty) {
+          manualError.textContent = "This payment has already been recorded.";
           manualError.style.display = "block";
           return;
         }
 
-        try {
-          // Same duplicate check as the tenant portal — a message
-          // shouldn't be recorded twice regardless of who enters it.
-          const dupe = await db.collection("payments").where("transactionCode", "==", parsed.transactionCode).get();
-          if (!dupe.empty) {
-            manualError.textContent = "This payment has already been recorded.";
-            manualError.style.display = "block";
-            return;
-          }
+        const landlordDoc = landlordsCache.find((d) => d.id === landlordId);
+        const recipientMatch = landlordDoc ? checkRecipientMatch(parsed, landlordDoc.data()) : false;
 
-          const landlordDoc = landlordsCache.find((d) => d.id === landlordId);
-          const recipientMatch = landlordDoc ? checkRecipientMatch(parsed, landlordDoc.data()) : false;
-
-          await db.collection("payments").add({
-            tenantId: null,
-            unitId,
-            landlordId,
-            rawMessage: parsed.rawMessage,
-            method: parsed.method,
-            transactionCode: parsed.transactionCode,
-            amount: parsed.amount,
-            paidAtRaw: parsed.paidAtRaw,
-            recipientName: parsed.recipientName || null,
-            recipientMatch,
-            enteredByStaff: true,
-            status: "verified", // staff already reviewed the message before entering it
-            submittedAt: firebase.firestore.FieldValue.serverTimestamp()
-          });
-          manualForm.reset();
-        } catch (err) {
-          manualError.textContent = "Couldn't record payment: " + err.message;
-          manualError.style.display = "block";
-        }
-      });
-    }
+        await db.collection("payments").add({
+          tenantId: null,
+          unitId,
+          landlordId,
+          rawMessage: parsed.rawMessage,
+          method: parsed.method,
+          transactionCode: parsed.transactionCode,
+          amount: parsed.amount,
+          paidAtRaw: parsed.paidAtRaw,
+          recipientName: parsed.recipientName || null,
+          recipientMatch,
+          enteredByStaff: true,
+          status: "verified", // staff already reviewed the message before entering it
+          submittedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        manualForm.reset();
+        modal.classList.remove("open");
+      } catch (err) {
+        manualError.textContent = "Couldn't record payment: " + err.message;
+        manualError.style.display = "block";
+      }
+    });
   });
 
   activeListeners.push(unsubscribe);
