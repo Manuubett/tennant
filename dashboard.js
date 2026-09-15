@@ -171,6 +171,52 @@ async function renderActiveTab() {
 }
 
 // ---------------------------------------------------------------------
+// COLLAPSIBLE "ADD / RECORD" PANEL HELPER
+// ---------------------------------------------------------------------
+// Wraps a form (or any block) in a collapsed-by-default panel with a
+// toggle header, and returns the HTML string. Used so "Add Landlord",
+// "Add Unit" and "Record Deposit" sit above their tables instead of
+// buried below a long list, and can be tucked away when not needed.
+// Call wireCollapsePanel(id) after inserting the HTML to hook up the
+// toggle button; pass startOpen: true to render it expanded (e.g. when
+// editing an existing record).
+function collapsePanelHTML({ id, title, collapsedLabel, expandedLabel, bodyHTML, startOpen = false }) {
+  return `
+    <div class="card collapse-panel${startOpen ? " open" : ""}" id="${id}">
+      <button type="button" class="collapse-panel-toggle" data-collapse-toggle="${id}" style="display:flex; align-items:center; justify-content:space-between; width:100%; background:none; border:none; cursor:pointer; padding:0; text-align:left;">
+        <span class="card-title" id="${id}-title" style="margin:0;">${startOpen ? expandedLabel : collapsedLabel}</span>
+        <svg class="collapse-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" style="flex-shrink:0; transition:transform .15s ease; transform:rotate(${startOpen ? "180" : "0"}deg);"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div class="collapse-panel-body" id="${id}-body" style="margin-top:${startOpen ? "14px" : "0"}; max-height:${startOpen ? "none" : "0"}; overflow:${startOpen ? "visible" : "hidden"};">
+        ${bodyHTML}
+      </div>
+    </div>`;
+}
+
+function wireCollapsePanel(id, { expandedLabel, collapsedLabel } = {}) {
+  const panel = document.getElementById(id);
+  const body = document.getElementById(`${id}-body`);
+  const titleEl = document.getElementById(`${id}-title`);
+  if (!panel || !body) return;
+  const toggleBtn = panel.querySelector(`[data-collapse-toggle="${id}"]`);
+  const chevron = panel.querySelector(".collapse-chevron");
+
+  function setOpen(open) {
+    panel.classList.toggle("open", open);
+    body.style.maxHeight = open ? "none" : "0";
+    body.style.overflow = open ? "visible" : "hidden";
+    body.style.marginTop = open ? "14px" : "0";
+    if (chevron) chevron.style.transform = `rotate(${open ? 180 : 0}deg)`;
+    if (titleEl && expandedLabel && collapsedLabel) {
+      titleEl.textContent = open ? expandedLabel : collapsedLabel;
+    }
+  }
+
+  toggleBtn.addEventListener("click", () => setOpen(!panel.classList.contains("open")));
+  panel._setOpen = setOpen; // exposed so callers (e.g. "Edit") can force it open
+}
+
+// ---------------------------------------------------------------------
 // OVERVIEW TAB (charts + PDF export)
 // ---------------------------------------------------------------------
 async function renderOverviewTab() {
@@ -442,12 +488,25 @@ function renderPaymentsTab() {
     const unitOptions = unitsCache.map((doc) => `<option value="${doc.id}" data-landlord="${doc.data().landlordId}">${escapeHTML(doc.data().houseNumber)} — ${escapeHTML(landlordName(doc.data().landlordId))}</option>`).join("");
 
     contentBox.innerHTML = `
+      ${collapsePanelHTML({
+        id: "record-payment-panel",
+        title: "Record Payment",
+        collapsedLabel: "+ Record Payment",
+        expandedLabel: "Record Payment on Behalf of a Tenant",
+        bodyHTML: `
+          <div class="card-sub" style="margin-bottom:14px;">Use this when a tenant forwarded their M-Pesa confirmation (e.g. via WhatsApp) instead of submitting it themselves through the app. Paste the exact message text below — it's parsed and counted toward commission the same as any tenant-submitted payment.</div>
+          <form id="manual-payment-form">
+            <div class="field"><label>Unit</label><select name="unitId" id="manual-unit-select" required>${unitOptions}</select></div>
+            <div class="field"><label>M-Pesa Message</label><textarea name="message" placeholder="Paste the full confirmation message here..." required></textarea></div>
+            <button type="submit" class="btn btn-primary">Record Payment</button>
+            <p class="alert alert-error" id="manual-payment-error" style="display:none;"></p>
+          </form>`
+      })}
       <div class="table-toolbar">
         <div class="table-search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input type="text" id="payment-search" placeholder="Search by unit, landlord or reference&hellip;">
         </div>
-        <button class="btn btn-primary" id="btn-open-record-payment" style="width:auto; padding:10px 18px; white-space:nowrap;">+ Record Payment</button>
       </div>
       <div class="table-wrap">
         <table class="data-table">
@@ -457,23 +516,9 @@ function renderPaymentsTab() {
           <tbody id="payments-tbody">${rowsHTML}</tbody>
         </table>
         <p class="empty-state" id="payments-empty" style="display:${snapshot.empty ? "block" : "none"};">No payments submitted yet.</p>
-      </div>
-
-      <div class="modal-overlay" id="record-payment-modal">
-        <div class="modal-card">
-          <div class="modal-header">
-            <div class="card-title">Record Payment on Behalf of a Tenant</div>
-            <button class="modal-close" id="close-record-payment" aria-label="Close">&times;</button>
-          </div>
-          <div class="card-sub" style="margin-bottom:14px;">Use this when a tenant forwarded their M-Pesa confirmation (e.g. via WhatsApp) instead of submitting it themselves through the app. Paste the exact message text below — it's parsed and counted toward commission the same as any tenant-submitted payment.</div>
-          <form id="manual-payment-form">
-            <div class="field"><label>Unit</label><select name="unitId" id="manual-unit-select" required>${unitOptions}</select></div>
-            <div class="field"><label>M-Pesa Message</label><textarea name="message" placeholder="Paste the full confirmation message here..." required></textarea></div>
-            <button type="submit" class="btn btn-primary">Record Payment</button>
-            <p class="alert alert-error" id="manual-payment-error" style="display:none;"></p>
-          </form>
-        </div>
       </div>`;
+
+    wireCollapsePanel("record-payment-panel", { collapsedLabel: "+ Record Payment", expandedLabel: "Record Payment on Behalf of a Tenant" });
 
     // --- Client-side search over the already-loaded rows ---
     const tbody = document.getElementById("payments-tbody");
@@ -497,12 +542,6 @@ function renderPaymentsTab() {
       });
       paintRows(filteredDocs);
     });
-
-    // --- Modal open/close ---
-    const modal = document.getElementById("record-payment-modal");
-    document.getElementById("btn-open-record-payment").addEventListener("click", () => modal.classList.add("open"));
-    document.getElementById("close-record-payment").addEventListener("click", () => modal.classList.remove("open"));
-    modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.remove("open"); });
 
     function wireRowActions() {
       contentBox.querySelectorAll("[data-action]").forEach((btn) => {
@@ -574,7 +613,7 @@ function renderPaymentsTab() {
           submittedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         manualForm.reset();
-        modal.classList.remove("open");
+        document.getElementById("record-payment-panel")._setOpen(false);
       } catch (err) {
         manualError.textContent = "Couldn't record payment: " + err.message;
         manualError.style.display = "block";
@@ -810,6 +849,41 @@ function renderLandlordsTab() {
   });
 
   contentBox.innerHTML = `
+    ${collapsePanelHTML({
+      id: "landlord-form-panel",
+      title: "Add Landlord",
+      collapsedLabel: "+ Add Landlord",
+      expandedLabel: "Add Landlord",
+      bodyHTML: `
+        <form id="landlord-form">
+          <div class="field"><label>Name</label><input type="text" name="name" required></div>
+          <div class="field"><label>Contact</label><input type="text" name="contact"></div>
+          <div class="field">
+            <label>Payment Method</label>
+            <select name="paymentMethod" id="ll-method">
+              <option value="paybill">Paybill</option>
+              <option value="till">Till Number</option>
+              <option value="phone">Send Money (Phone)</option>
+            </select>
+          </div>
+          <div id="ll-paybill-fields">
+            <div class="field"><label>Paybill Number</label><input type="text" name="paybillNumber"></div>
+            <div class="field"><label>Account Number (optional, for matching)</label><input type="text" name="accountHint"></div>
+          </div>
+          <div id="ll-till-fields" style="display:none;">
+            <div class="field"><label>Till Number</label><input type="text" name="tillNumber"></div>
+            <div class="field"><label>Business Name (as shown on M-Pesa)</label><input type="text" name="businessName"></div>
+          </div>
+          <div id="ll-phone-fields" style="display:none;">
+            <div class="field"><label>Phone Number</label><input type="text" name="phoneNumber"></div>
+            <div class="field"><label>Registered M-Pesa Name</label><input type="text" name="registeredName"></div>
+          </div>
+          <div style="display:flex; gap:10px;">
+            <button type="submit" class="btn btn-primary" id="landlord-form-submit">Add Landlord</button>
+            <button type="button" class="btn btn-outline" id="landlord-form-cancel" style="display:none;">Cancel</button>
+          </div>
+        </form>`
+    })}
     <div class="table-toolbar">
       <div class="table-search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -822,38 +896,9 @@ function renderLandlordsTab() {
         <tbody id="landlords-tbody"></tbody>
       </table>
       <p class="empty-state" id="landlords-empty" style="display:none;">No landlords match your search.</p>
-    </div>
-    <div class="card">
-      <div class="card-title" id="landlord-form-title">Add Landlord</div>
-      <form id="landlord-form" style="margin-top:12px;">
-        <div class="field"><label>Name</label><input type="text" name="name" required></div>
-        <div class="field"><label>Contact</label><input type="text" name="contact"></div>
-        <div class="field">
-          <label>Payment Method</label>
-          <select name="paymentMethod" id="ll-method">
-            <option value="paybill">Paybill</option>
-            <option value="till">Till Number</option>
-            <option value="phone">Send Money (Phone)</option>
-          </select>
-        </div>
-        <div id="ll-paybill-fields">
-          <div class="field"><label>Paybill Number</label><input type="text" name="paybillNumber"></div>
-          <div class="field"><label>Account Number (optional, for matching)</label><input type="text" name="accountHint"></div>
-        </div>
-        <div id="ll-till-fields" style="display:none;">
-          <div class="field"><label>Till Number</label><input type="text" name="tillNumber"></div>
-          <div class="field"><label>Business Name (as shown on M-Pesa)</label><input type="text" name="businessName"></div>
-        </div>
-        <div id="ll-phone-fields" style="display:none;">
-          <div class="field"><label>Phone Number</label><input type="text" name="phoneNumber"></div>
-          <div class="field"><label>Registered M-Pesa Name</label><input type="text" name="registeredName"></div>
-        </div>
-        <div style="display:flex; gap:10px;">
-          <button type="submit" class="btn btn-primary" id="landlord-form-submit">Add Landlord</button>
-          <button type="button" class="btn btn-outline" id="landlord-form-cancel" style="display:none;">Cancel</button>
-        </div>
-      </form>
     </div>`;
+
+  wireCollapsePanel("landlord-form-panel", { collapsedLabel: "+ Add Landlord", expandedLabel: "Add Landlord" });
 
   const tbody = document.getElementById("landlords-tbody");
   const emptyState = document.getElementById("landlords-empty");
@@ -925,7 +970,8 @@ function renderLandlordsTab() {
   const form = document.getElementById("landlord-form");
   const submitBtn = document.getElementById("landlord-form-submit");
   const cancelBtn = document.getElementById("landlord-form-cancel");
-  const formTitle = document.getElementById("landlord-form-title");
+  const panel = document.getElementById("landlord-form-panel");
+  const panelTitle = document.getElementById("landlord-form-panel-title");
 
   function toggleMethodFields() {
     document.getElementById("ll-paybill-fields").style.display = methodSelect.value === "paybill" ? "block" : "none";
@@ -949,19 +995,21 @@ function renderLandlordsTab() {
     form.phoneNumber.value = l.phoneNumber || "";
     form.registeredName.value = l.registeredName || "";
     toggleMethodFields();
-    formTitle.textContent = `Edit ${l.name}`;
+    if (panelTitle) panelTitle.textContent = `Edit ${l.name}`;
     submitBtn.textContent = "Save Changes";
-    cancelBtn.style.display = "block";
-    form.scrollIntoView({ behavior: "smooth", block: "start" });
+    cancelBtn.style.display = "inline-block";
+    panel._setOpen(true);
+    panel.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   cancelBtn.addEventListener("click", () => {
     editingLandlordId = null;
     form.reset();
     toggleMethodFields();
-    formTitle.textContent = "Add Landlord";
+    if (panelTitle) panelTitle.textContent = "Add Landlord";
     submitBtn.textContent = "Add Landlord";
     cancelBtn.style.display = "none";
+    panel._setOpen(false);
   });
 
   form.addEventListener("submit", async (e) => {
@@ -996,7 +1044,7 @@ function renderLandlordsTab() {
 // UNITS TAB
 // ---------------------------------------------------------------------
 function renderUnitsTab() {
-  const rows = unitsCache.map((doc) => {
+  const cards = unitsCache.map((doc) => {
     const u = doc.data();
     const vacant = u.occupancy === "vacant";
     return `
@@ -1016,20 +1064,26 @@ function renderUnitsTab() {
   const landlordOptions = landlordsCache.map((doc) => `<option value="${doc.id}">${doc.data().name}</option>`).join("");
 
   contentBox.innerHTML = `
-    ${rows}
-    <div class="card">
-      <div class="card-title">Add Unit</div>
-      <form id="unit-form" style="margin-top:12px;">
-        <div class="field"><label>Landlord / Property</label><select name="landlordId" required>${landlordOptions}</select></div>
-        <div class="field"><label>House / Unit Number</label><input type="text" name="houseNumber" placeholder="e.g. 3A" required></div>
-        <div class="field"><label>Property Name</label><input type="text" name="propertyName" placeholder="e.g. E&amp;L Apartments"></div>
-        <div class="field"><label>Unit Type</label><input type="text" name="unitType" placeholder="e.g. 2BR, Bedsitter, Single"></div>
-        <div class="field"><label>Monthly Rent (KSh)</label><input type="number" name="rentAmount" min="0"></div>
-        <div class="field"><label>Water Meter Number</label><input type="text" name="waterMeterNumber"></div>
-        <div class="field"><label>Power Meter Number</label><input type="text" name="powerMeterNumber"></div>
-        <button type="submit" class="btn btn-primary">Add Unit</button>
-      </form>
-    </div>`;
+    ${collapsePanelHTML({
+      id: "unit-form-panel",
+      title: "Add Unit",
+      collapsedLabel: "+ Add Unit",
+      expandedLabel: "Add Unit",
+      bodyHTML: `
+        <form id="unit-form">
+          <div class="field"><label>Landlord / Property</label><select name="landlordId" required>${landlordOptions}</select></div>
+          <div class="field"><label>House / Unit Number</label><input type="text" name="houseNumber" placeholder="e.g. 3A" required></div>
+          <div class="field"><label>Property Name</label><input type="text" name="propertyName" placeholder="e.g. E&amp;L Apartments"></div>
+          <div class="field"><label>Unit Type</label><input type="text" name="unitType" placeholder="e.g. 2BR, Bedsitter, Single"></div>
+          <div class="field"><label>Monthly Rent (KSh)</label><input type="number" name="rentAmount" min="0"></div>
+          <div class="field"><label>Water Meter Number</label><input type="text" name="waterMeterNumber"></div>
+          <div class="field"><label>Power Meter Number</label><input type="text" name="powerMeterNumber"></div>
+          <button type="submit" class="btn btn-primary">Add Unit</button>
+        </form>`
+    })}
+    ${cards}`;
+
+  wireCollapsePanel("unit-form-panel", { collapsedLabel: "+ Add Unit", expandedLabel: "Add Unit" });
 
   contentBox.querySelectorAll("[data-toggle-occupancy]").forEach((pill) => {
     pill.addEventListener("click", async () => {
@@ -1090,17 +1144,24 @@ function renderDepositsTab() {
 
     const unitOptions = unitsCache.map((doc) => `<option value="${doc.id}">${escapeHTML(doc.data().houseNumber)} — ${escapeHTML(landlordName(doc.data().landlordId))}</option>`).join("");
 
-    contentBox.innerHTML = rows + `
-      <div class="card">
-        <div class="card-title">Record a Deposit</div>
-        <form id="deposit-form" style="margin-top:12px;">
-          <div class="field"><label>Unit</label><select name="unitId" required>${unitOptions}</select></div>
-          <div class="field"><label>Tenant Name</label><input type="text" name="tenantName" required></div>
-          <div class="field"><label>Amount Paid (KSh)</label><input type="number" name="amountPaid" min="0" required></div>
-          <div class="field"><label>Date Paid</label><input type="date" name="paidAt" required></div>
-          <button type="submit" class="btn btn-primary">Record Deposit</button>
-        </form>
-      </div>`;
+    contentBox.innerHTML = `
+      ${collapsePanelHTML({
+        id: "deposit-form-panel",
+        title: "Record a Deposit",
+        collapsedLabel: "+ Record a Deposit",
+        expandedLabel: "Record a Deposit",
+        bodyHTML: `
+          <form id="deposit-form">
+            <div class="field"><label>Unit</label><select name="unitId" required>${unitOptions}</select></div>
+            <div class="field"><label>Tenant Name</label><input type="text" name="tenantName" required></div>
+            <div class="field"><label>Amount Paid (KSh)</label><input type="number" name="amountPaid" min="0" required></div>
+            <div class="field"><label>Date Paid</label><input type="date" name="paidAt" required></div>
+            <button type="submit" class="btn btn-primary">Record Deposit</button>
+          </form>`
+      })}
+      ${rows}`;
+
+    wireCollapsePanel("deposit-form-panel", { collapsedLabel: "+ Record a Deposit", expandedLabel: "Record a Deposit" });
 
     document.getElementById("deposit-form").addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -1118,6 +1179,7 @@ function renderDepositsTab() {
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         e.target.reset();
+        document.getElementById("deposit-form-panel")._setOpen(false);
       } catch (err) {
         alert("Couldn't record deposit: " + err.message);
       }
