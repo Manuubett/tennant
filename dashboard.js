@@ -10,13 +10,15 @@ function escapeHTML(str) {
 
 document.getElementById("logout-btn").addEventListener("click", () => auth.signOut().then(() => window.location.href = "login.html"));
 
-let activeTab = "payments";
+let activeTab = "overview";
 let landlordsCache = [];
 let unitsCache = [];
 let tenantsCache = [];
 let viewingTenantId = null;
+let overviewCharts = {};
 
 const TABS = [
+  { key: "overview", label: "Overview" },
   { key: "payments", label: "Payments" },
   { key: "tenants", label: "Tenants" },
   { key: "landlords", label: "Landlords" },
@@ -89,13 +91,149 @@ function isOverdue(tenant, paidUnitIds) {
 async function renderActiveTab() {
   contentBox.innerHTML = `<p class="empty-state">Loading&hellip;</p>`;
   await refreshCaches();
-  if (activeTab === "payments") renderPaymentsTab();
+  if (activeTab === "overview") renderOverviewTab();
+  else if (activeTab === "payments") renderPaymentsTab();
   else if (activeTab === "tenants") renderTenantsTab();
   else if (activeTab === "landlords") renderLandlordsTab();
   else if (activeTab === "units") renderUnitsTab();
   else if (activeTab === "deposits") renderDepositsTab();
   else if (activeTab === "reports") renderReportsTab();
   else if (activeTab === "settings") renderSettingsTab();
+}
+
+// ---------------------------------------------------------------------
+// OVERVIEW TAB (charts + PDF export)
+// ---------------------------------------------------------------------
+async function renderOverviewTab() {
+  const months = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    months.push(new Date(now.getFullYear(), now.getMonth() - i, 1));
+  }
+  const sixMonthsAgoStart = months[0];
+
+  const [trendSnap, thisMonthSnap] = await Promise.all([
+    db.collection("payments").where("status", "==", "verified").where("submittedAt", ">=", sixMonthsAgoStart).get(),
+    (() => {
+      const { start, end } = currentMonthRange();
+      return db.collection("payments").where("submittedAt", ">=", start).where("submittedAt", "<", end).get();
+    })()
+  ]);
+
+  if (activeTab !== "overview") return;
+
+  // Monthly collected totals (verified payments only)
+  const monthlyTotals = months.map(() => 0);
+  trendSnap.docs.forEach((doc) => {
+    const p = doc.data();
+    if (!p.submittedAt) return;
+    const date = p.submittedAt.toDate();
+    const idx = months.findIndex((m) => m.getFullYear() === date.getFullYear() && m.getMonth() === date.getMonth());
+    if (idx !== -1) monthlyTotals[idx] += Number(p.amount || 0);
+  });
+
+  // This month's status breakdown (all statuses)
+  const statusCounts = { verified: 0, pending: 0, rejected: 0 };
+  thisMonthSnap.docs.forEach((doc) => {
+    const s = doc.data().status;
+    if (statusCounts[s] !== undefined) statusCounts[s]++;
+  });
+
+  // Arrears trend — occupied units with no verified payment that month.
+  // Uses today's unit list for all 6 months since we don't track historical
+  // occupancy changes; treat this as an approximation, not an exact record.
+  const occupiedUnits = unitsCache.filter((u) => u.data().occupancy !== "vacant");
+  const arrearsByMonth = [];
+  for (const m of months) {
+    const start = m;
+    const end = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+    const snap = await db.collection("payments")
+      .where("status", "==", "verified")
+      .where("submittedAt", ">=", start)
+      .where("submittedAt", "<", end)
+      .get();
+    const paidUnitIds = new Set(snap.docs.map((d) => d.data().unitId));
+    arrearsByMonth.push(occupiedUnits.filter((u) => !paidUnitIds.has(u.id)).length);
+  }
+
+  if (activeTab !== "overview") return;
+
+  const occupiedCount = occupiedUnits.length;
+  const vacantCount = unitsCache.length - occupiedCount;
+  const monthLabels = months.map((m) => m.toLocaleString("en-KE", { month: "short" }));
+
+  contentBox.innerHTML = `
+    <div class="overview-actions"><button class="btn btn-primary" id="btn-download-pdf">Download PDF Report</button></div>
+    <div class="chart-card"><div class="card-title">Rent Collected — Last 6 Months</div><canvas id="chart-trend"></canvas></div>
+    <div class="chart-card"><div class="card-title">Payment Status — This Month</div><canvas id="chart-status"></canvas></div>
+    <div class="chart-card"><div class="card-title">Arrears Trend — Last 6 Months</div><canvas id="chart-arrears"></canvas></div>
+    <div class="chart-card"><div class="card-title">Occupancy</div><canvas id="chart-occupancy"></canvas></div>`;
+
+  Object.values(overviewCharts).forEach((c) => c.destroy());
+  overviewCharts = {};
+
+  overviewCharts.trend = new Chart(document.getElementById("chart-trend"), {
+    type: "bar",
+    data: { labels: monthLabels, datasets: [{ label: "KSh Collected", data: monthlyTotals, backgroundColor: "#e6007e", borderRadius: 6 }] },
+    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+  });
+
+  overviewCharts.status = new Chart(document.getElementById("chart-status"), {
+    type: "doughnut",
+    data: { labels: ["Verified", "Pending", "Rejected"], datasets: [{ data: [statusCounts.verified, statusCounts.pending, statusCounts.rejected], backgroundColor: ["#1e9e5a", "#a9760a", "#b42323"] }] },
+    options: { plugins: { legend: { position: "bottom" } } }
+  });
+
+  overviewCharts.arrears = new Chart(document.getElementById("chart-arrears"), {
+    type: "line",
+    data: { labels: monthLabels, datasets: [{ label: "Units in Arrears", data: arrearsByMonth, borderColor: "#b42323", backgroundColor: "rgba(180,35,35,.1)", fill: true, tension: 0.3 }] },
+    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+  });
+
+  overviewCharts.occupancy = new Chart(document.getElementById("chart-occupancy"), {
+    type: "doughnut",
+    data: { labels: ["Occupied", "Vacant"], datasets: [{ data: [occupiedCount, vacantCount], backgroundColor: ["#e6007e", "#e4e9f0"] }] },
+    options: { plugins: { legend: { position: "bottom" } } }
+  });
+
+  document.getElementById("btn-download-pdf").addEventListener("click", () => generateOverviewPDF({ occupiedCount, vacantCount, statusCounts }));
+}
+
+function generateOverviewPDF(data) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  doc.setFontSize(18);
+  doc.setTextColor(230, 0, 126);
+  doc.text("Sanefi Rent — Overview Report", 14, 20);
+  doc.setFontSize(10);
+  doc.setTextColor(75, 92, 114);
+  doc.text(`Generated ${new Date().toLocaleDateString("en-KE", { day: "numeric", month: "long", year: "numeric" })}`, 14, 27);
+
+  doc.setFontSize(12);
+  doc.setTextColor(16, 35, 63);
+  doc.text(`Occupied Units: ${data.occupiedCount}    Vacant Units: ${data.vacantCount}`, 14, 39);
+  doc.text(`This Month — Verified: ${data.statusCounts.verified}, Pending: ${data.statusCounts.pending}, Rejected: ${data.statusCounts.rejected}`, 14, 46);
+
+  const chartOrder = ["trend", "status", "arrears", "occupancy"];
+  const titles = {
+    trend: "Rent Collected — Last 6 Months",
+    status: "Payment Status — This Month",
+    arrears: "Arrears Trend — Last 6 Months",
+    occupancy: "Occupancy"
+  };
+
+  chartOrder.forEach((key, i) => {
+    const chart = overviewCharts[key];
+    if (!chart) return;
+    doc.addPage();
+    doc.setFontSize(13);
+    doc.setTextColor(16, 35, 63);
+    doc.text(titles[key], 14, 20);
+    doc.addImage(chart.toBase64Image(), "PNG", 14, 28, 180, 100);
+  });
+
+  doc.save(`sanefi-overview-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 // ---------------------------------------------------------------------
@@ -778,16 +916,21 @@ auth.onAuthStateChanged(async (user) => {
     return;
   }
 
-  const [pendingSnap, tenantSnap, paidUnitIds] = await Promise.all([
+  const [pendingSnap, tenantSnap, unitsSnap, paidUnitIds] = await Promise.all([
     db.collection("payments").where("status", "==", "pending").get(),
     db.collection("tenants").get(),
+    db.collection("units").get(),
     getPaidUnitIdsThisMonth()
   ]);
   const overdueCount = tenantSnap.docs.filter((d) => isOverdue(d.data(), paidUnitIds)).length;
+  const occupiedCount = unitsSnap.docs.filter((d) => d.data().occupancy !== "vacant").length;
+  const vacantCount = unitsSnap.size - occupiedCount;
 
   statRow.innerHTML = `
     <div class="stat-box"><div class="num">${pendingSnap.size}</div><div class="label">Pending Payments</div></div>
     <div class="stat-box"><div class="num">${tenantSnap.size}</div><div class="label">Total Tenants</div></div>
+    <div class="stat-box"><div class="num">${occupiedCount}</div><div class="label">Occupied Units</div></div>
+    <div class="stat-box"><div class="num">${vacantCount}</div><div class="label">Vacant Units</div></div>
     <div class="stat-box"><div class="num">${overdueCount}</div><div class="label">Overdue This Month</div></div>`;
 
   renderTabs();
