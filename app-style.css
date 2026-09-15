@@ -334,3 +334,10 @@ svg { display: block; }
     .data-table td[data-label=""]::before { content: none; }
     .table-actions { justify-content: flex-start; margin-top: 8px; }
 }
+.pill-neutral { background: #e6e9f0; color: var(--ink-soft); }
+
+.data-table td[data-label="Status"] { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+@media (max-width: 720px) {
+    .data-table td[data-label="Status"] { display: block; }
+    .data-table td[data-label="Status"] .pill { margin-right: 5px; }
+}
