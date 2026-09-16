@@ -190,10 +190,6 @@ svg { display: block; }
 .pill-rejected { background: var(--red-tint); color: var(--red); }
 .pill-mismatch { background: var(--red-tint); color: var(--red); }
 .pill-neutral { background: #e6e9f0; color: var(--ink-soft); }
-/* "The ball's in your court" — a maintenance request marked resolved by
-   staff but not yet confirmed by the tenant. Uses the brand pink so it
-   reads as distinctly different from "amber = staff still working on it"
-   and "green = fully done". */
 .pill-awaiting { background: var(--pink-tint); color: var(--pink-dark); }
 
 /* ---------- Payment history rows ---------- */
@@ -272,8 +268,6 @@ svg { display: block; }
 .chip { display: inline-block; font-size: 11px; font-weight: 600; color: var(--ink-soft); background: var(--bg); border: 1px solid var(--border); padding: 3px 9px; border-radius: 999px; }
 
 /* ---------- Maintenance confirm / reopen flow (tenant portal) ---------- */
-/* Shown on a request card once staff marks it "resolved" — the tenant
-   either confirms it's fixed or sends it back with a note. */
 .maintenance-confirm { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .maintenance-confirm .card-sub { margin-bottom: 10px; }
 .maintenance-confirm .btn, .maintenance-reopen-form .btn { width: auto; padding: 8px 16px; font-size: 13px; }
@@ -286,14 +280,40 @@ svg { display: block; }
 .maintenance-reopen-form .field { margin-bottom: 8px; }
 .maintenance-reopen-form textarea { min-height: 64px; font-family: var(--font-sans); font-size: 13.5px; }
 
-/* Staff-side note showing why a tenant sent a "resolved" request back */
 .maintenance-tenant-note { margin-top: 6px; }
 .maintenance-tenant-note strong { color: var(--ink); }
 
+/* ---------- Maintenance comment thread ---------- */
+/* "View Conversation" toggle + the thread panel it opens beneath a
+   maintenance card. Tenant messages align right (brand tint), staff
+   messages align left (neutral), like a normal chat thread. */
+.comment-toggle {
+    display: inline-block; margin-top: 12px; background: none; border: none;
+    color: var(--pink); font-weight: 600; font-size: 12.5px; cursor: pointer; padding: 0;
+}
+.comment-toggle:hover { color: var(--pink-dark); text-decoration: underline; }
+
+.comment-panel { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+
+.comment-thread {
+    display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto;
+    padding-right: 2px; margin-bottom: 10px;
+}
+.comment-bubble { max-width: 82%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.45; }
+.comment-tenant { align-self: flex-end; background: var(--pink-tint); color: var(--ink); border-bottom-right-radius: 4px; }
+.comment-staff { align-self: flex-start; background: var(--bg); border: 1px solid var(--border); color: var(--ink); border-bottom-left-radius: 4px; }
+.comment-author { font-size: 10.5px; font-weight: 700; color: var(--ink-soft); margin-bottom: 2px; text-transform: uppercase; letter-spacing: .02em; }
+.comment-text { white-space: pre-wrap; word-break: break-word; }
+.comment-time { font-size: 10.5px; color: var(--ink-faint); margin-top: 4px; }
+
+.comment-input-row { display: flex; gap: 8px; align-items: flex-end; }
+.comment-input-row textarea {
+    flex: 1; min-height: 40px; height: 40px; resize: none; font-family: var(--font-sans);
+    font-size: 13.5px; padding: 9px 12px;
+}
+.comment-input-row .btn { width: auto; padding: 9px 16px; font-size: 13px; flex-shrink: 0; }
+
 /* ---------- Collapsible "add / record" panels (staff dashboard) ---------- */
-/* Used for Add Landlord, Add Unit, Record a Deposit and Record Payment —
-   sits above the list, collapsed by default, expands on click instead of
-   the form permanently taking up space at the bottom of a long page. */
 .collapse-panel { padding: 16px 20px; transition: border-color .15s ease, box-shadow .15s ease; }
 .collapse-panel-toggle {
     display: flex; align-items: center; justify-content: space-between; width: 100%;
