@@ -8,67 +8,115 @@
 </head>
 <body>
 
-<header class="app-header">
-  <h1 id="tenant-header">My Rent</h1>
-  <div class="header-actions">
-    <button class="icon-btn" id="notif-btn" aria-label="Notifications">&#128276;</button>
-    <button class="logout-btn" id="logout-btn">Log Out</button>
-  </div>
-  <div class="notif-panel" id="notif-panel"></div>
-</header>
+<div class="dashboard-shell">
+  <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
 
-<div class="app-container">
-  <div id="pending-notice"></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="mark">S</div>
+      <div class="name">Sanefi Rent<span>Tenant Portal</span></div>
+      <button class="sidebar-close" id="sidebar-close" aria-label="Close menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <nav class="tabs" id="tabs">
+      <a href="#rent-status-section" class="tab-btn active" data-nav-link>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/></svg>
+        <span>Rent Status</span>
+      </a>
+      <a href="#payment-section" class="tab-btn" data-nav-link>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="13" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="15" x2="10" y2="15"/></svg>
+        <span>Submit Payment</span>
+      </a>
+      <a href="#history-section" class="tab-btn" data-nav-link>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M6 3h8l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>
+        <span>Payment History</span>
+      </a>
+      <a href="#maintenance-section" class="tab-btn" data-nav-link>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+        <span>Maintenance</span>
+      </a>
+    </nav>
+  </aside>
 
-  <div id="rent-status-card"></div>
-
-  <div id="lease-deposit-card"></div>
-
-  <div class="card">
-    <div class="card-title">Submit a Payment</div>
-    <div class="card-sub" style="margin-bottom:14px;">Paste the full M-Pesa confirmation message you received after paying rent.</div>
-    <form id="payment-form">
-      <div class="field">
-        <textarea name="message" placeholder="e.g. RK7X8Y9Z1A Confirmed. Ksh15,000.00 sent to..." required></textarea>
+  <div class="main-wrap">
+    <header class="app-header">
+      <div class="header-left">
+        <button class="menu-btn" id="menu-btn" aria-label="Open menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <h1 id="tenant-header">My Rent</h1>
       </div>
-      <button type="submit" class="btn btn-primary" id="submit-payment-btn">Submit Payment</button>
-      <p class="alert alert-error" id="payment-error" style="display:none;"></p>
-      <p class="alert alert-success" id="payment-success" style="display:none;"></p>
-    </form>
-  </div>
-
-  <h3 style="margin-bottom:8px;">Payment History</h3>
-  <div class="card" id="history-card">
-    <p class="empty-state">Loading&hellip;</p>
-  </div>
-
-  <h3 style="margin-bottom:8px;">Maintenance Requests</h3>
-  <div id="maintenance-list">
-    <p class="empty-state">Loading&hellip;</p>
-  </div>
-  <div class="card">
-    <div class="card-title">Report an Issue</div>
-    <div class="card-sub" style="margin-bottom:14px;">Let the office know about a repair or maintenance issue in your unit.</div>
-    <form id="maintenance-form">
-      <div class="field">
-        <label>Category</label>
-        <select name="category" required>
-          <option value="Plumbing">Plumbing</option>
-          <option value="Electrical">Electrical</option>
-          <option value="Structural">Structural</option>
-          <option value="Appliance">Appliance</option>
-          <option value="Pest Control">Pest Control</option>
-          <option value="Other">Other</option>
-        </select>
+      <div class="header-actions">
+        <button class="icon-btn" id="notif-btn" aria-label="Notifications">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        </button>
+        <button class="logout-btn" id="logout-btn">Log Out</button>
       </div>
-      <div class="field">
-        <label>Description</label>
-        <textarea name="description" placeholder="Describe the issue..." required></textarea>
-      </div>
-      <button type="submit" class="btn btn-outline" id="submit-maintenance-btn">Submit Request</button>
-      <p class="alert alert-error" id="maintenance-error" style="display:none;"></p>
-      <p class="alert alert-success" id="maintenance-success" style="display:none;"></p>
-    </form>
+      <div class="notif-panel" id="notif-panel"></div>
+    </header>
+
+    <div class="app-container">
+      <div id="pending-notice"></div>
+
+      <section id="rent-status-section" class="portal-section">
+        <div id="rent-status-card"></div>
+        <div id="lease-deposit-card"></div>
+      </section>
+
+      <section id="payment-section" class="portal-section">
+        <div class="card">
+          <div class="card-title">Submit a Payment</div>
+          <div class="card-sub" style="margin-bottom:14px;">Paste the full M-Pesa confirmation message you received after paying rent.</div>
+          <form id="payment-form">
+            <div class="field">
+              <textarea name="message" placeholder="e.g. RK7X8Y9Z1A Confirmed. Ksh15,000.00 sent to..." required></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary" id="submit-payment-btn">Submit Payment</button>
+            <p class="alert alert-error" id="payment-error" style="display:none;"></p>
+            <p class="alert alert-success" id="payment-success" style="display:none;"></p>
+          </form>
+        </div>
+      </section>
+
+      <section id="history-section" class="portal-section">
+        <h3 style="margin-bottom:8px;">Payment History</h3>
+        <div class="card" id="history-card">
+          <p class="empty-state">Loading&hellip;</p>
+        </div>
+      </section>
+
+      <section id="maintenance-section" class="portal-section">
+        <h3 style="margin-bottom:8px;">Maintenance Requests</h3>
+        <div id="maintenance-list">
+          <p class="empty-state">Loading&hellip;</p>
+        </div>
+        <div class="card">
+          <div class="card-title">Report an Issue</div>
+          <div class="card-sub" style="margin-bottom:14px;">Let the office know about a repair or maintenance issue in your unit.</div>
+          <form id="maintenance-form">
+            <div class="field">
+              <label>Category</label>
+              <select name="category" required>
+                <option value="Plumbing">Plumbing</option>
+                <option value="Electrical">Electrical</option>
+                <option value="Structural">Structural</option>
+                <option value="Appliance">Appliance</option>
+                <option value="Pest Control">Pest Control</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Description</label>
+              <textarea name="description" placeholder="Describe the issue..." required></textarea>
+            </div>
+            <button type="submit" class="btn btn-outline" id="submit-maintenance-btn">Submit Request</button>
+            <p class="alert alert-error" id="maintenance-error" style="display:none;"></p>
+            <p class="alert alert-success" id="maintenance-success" style="display:none;"></p>
+          </form>
+        </div>
+      </section>
+    </div>
   </div>
 </div>
 
