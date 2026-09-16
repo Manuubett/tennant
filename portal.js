@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------
-// SIDEBAR (mobile off-canvas drawer + section navigation)
+// SIDEBAR (mobile off-canvas drawer + real section switching)
 // ---------------------------------------------------------------------
 (function setupSidebar() {
   const sidebarEl = document.getElementById("sidebar");
@@ -22,27 +22,40 @@
   if (backdrop) backdrop.addEventListener("click", closeSidebar);
 
   const navLinks = Array.from(document.querySelectorAll("#tabs [data-nav-link]"));
+  const sections = Array.from(document.querySelectorAll(".portal-section"));
+
+  // Single source of truth: shows exactly one section and keeps the
+  // sidebar highlight in sync with it. Replaces the old scroll-spy
+  // (IntersectionObserver) approach, which just scrolled to an anchor
+  // while every section stayed visible on one long page.
+  function activateSection(id) {
+    sections.forEach((s) => s.classList.toggle("active", s.id === id));
+    navLinks.forEach((l) => l.classList.toggle("active", l.getAttribute("href") === `#${id}`));
+    const main = document.querySelector(".main-wrap");
+    if (main) main.scrollTo({ top: 0, behavior: "auto" });
+  }
+
   navLinks.forEach((link) => {
-    link.addEventListener("click", () => {
-      navLinks.forEach((l) => l.classList.remove("active"));
-      link.classList.add("active");
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      const id = link.getAttribute("href").slice(1);
+      activateSection(id);
       closeSidebar();
     });
   });
 
-  if (navLinks.length && "IntersectionObserver" in window) {
-    const sections = navLinks
-      .map((l) => document.querySelector(l.getAttribute("href")))
-      .filter(Boolean);
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (!entry.isIntersecting) return;
-        const href = `#${entry.target.id}`;
-        navLinks.forEach((l) => l.classList.toggle("active", l.getAttribute("href") === href));
-      });
-    }, { rootMargin: "-35% 0px -55% 0px" });
-    sections.forEach((s) => observer.observe(s));
-  }
+  // Quick-action buttons (e.g. on the Overview tab) jump to a section the
+  // same way sidebar links do — just add data-goto-section="some-id".
+  document.addEventListener("click", (e) => {
+    const trigger = e.target.closest("[data-goto-section]");
+    if (!trigger) return;
+    activateSection(trigger.dataset.gotoSection);
+  });
+
+  // Land on whichever section is marked active in the HTML (Overview by
+  // default), falling back to the first section if none is marked.
+  const initial = sections.find((s) => s.classList.contains("active")) || sections[0];
+  if (initial) activateSection(initial.id);
 })();
 
 const header = document.getElementById("tenant-header");
