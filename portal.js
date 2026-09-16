@@ -1,3 +1,59 @@
+// ---------------------------------------------------------------------
+// SIDEBAR (mobile off-canvas drawer + section navigation)
+// ---------------------------------------------------------------------
+// Below 900px the sidebar is hidden off-screen (see app-style.css) and
+// opens as a drawer over a dimmed backdrop. Above that it's a fixed
+// column, so open/close calls are harmless no-ops on desktop — the CSS
+// simply doesn't apply the transform there.
+(function setupSidebar() {
+  const sidebarEl = document.getElementById("sidebar");
+  const backdrop = document.getElementById("sidebar-backdrop");
+  const menuBtn = document.getElementById("menu-btn");
+  const closeBtn = document.getElementById("sidebar-close");
+  if (!sidebarEl) return;
+
+  function openSidebar() {
+    sidebarEl.classList.add("open");
+    if (backdrop) backdrop.classList.add("open");
+  }
+  function closeSidebar() {
+    sidebarEl.classList.remove("open");
+    if (backdrop) backdrop.classList.remove("open");
+  }
+
+  if (menuBtn) menuBtn.addEventListener("click", openSidebar);
+  if (closeBtn) closeBtn.addEventListener("click", closeSidebar);
+  if (backdrop) backdrop.addEventListener("click", closeSidebar);
+
+  // Section nav: clicking a link marks it active and, on mobile, closes
+  // the drawer so it doesn't linger over the section just navigated to.
+  const navLinks = Array.from(document.querySelectorAll("#tabs [data-nav-link]"));
+  navLinks.forEach((link) => {
+    link.addEventListener("click", () => {
+      navLinks.forEach((l) => l.classList.remove("active"));
+      link.classList.add("active");
+      closeSidebar();
+    });
+  });
+
+  // Scroll-spy: highlight whichever section is currently in view so the
+  // active link stays correct even when the tenant scrolls by hand
+  // instead of tapping a nav link.
+  if (navLinks.length && "IntersectionObserver" in window) {
+    const sections = navLinks
+      .map((l) => document.querySelector(l.getAttribute("href")))
+      .filter(Boolean);
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const href = `#${entry.target.id}`;
+        navLinks.forEach((l) => l.classList.toggle("active", l.getAttribute("href") === href));
+      });
+    }, { rootMargin: "-35% 0px -55% 0px" });
+    sections.forEach((s) => observer.observe(s));
+  }
+})();
+
 const header = document.getElementById("tenant-header");
 const pendingNotice = document.getElementById("pending-notice");
 const paymentForm = document.getElementById("payment-form");
