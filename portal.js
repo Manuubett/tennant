@@ -1,10 +1,6 @@
 // ---------------------------------------------------------------------
 // SIDEBAR (mobile off-canvas drawer + section navigation)
 // ---------------------------------------------------------------------
-// Below 900px the sidebar is hidden off-screen (see app-style.css) and
-// opens as a drawer over a dimmed backdrop. Above that it's a fixed
-// column, so open/close calls are harmless no-ops on desktop — the CSS
-// simply doesn't apply the transform there.
 (function setupSidebar() {
   const sidebarEl = document.getElementById("sidebar");
   const backdrop = document.getElementById("sidebar-backdrop");
@@ -25,8 +21,6 @@
   if (closeBtn) closeBtn.addEventListener("click", closeSidebar);
   if (backdrop) backdrop.addEventListener("click", closeSidebar);
 
-  // Section nav: clicking a link marks it active and, on mobile, closes
-  // the drawer so it doesn't linger over the section just navigated to.
   const navLinks = Array.from(document.querySelectorAll("#tabs [data-nav-link]"));
   navLinks.forEach((link) => {
     link.addEventListener("click", () => {
@@ -36,9 +30,6 @@
     });
   });
 
-  // Scroll-spy: highlight whichever section is currently in view so the
-  // active link stays correct even when the tenant scrolls by hand
-  // instead of tapping a nav link.
   if (navLinks.length && "IntersectionObserver" in window) {
     const sections = navLinks
       .map((l) => document.querySelector(l.getAttribute("href")))
@@ -73,6 +64,10 @@ let tenantProfile = null;
 let landlordProfile = null;
 let unitProfile = null;
 
+// Tracks which maintenance request threads are currently expanded so they
+// stay open across re-renders of the list (e.g. when a status changes).
+const expandedThreads = new Set();
+
 document.getElementById("logout-btn").addEventListener("click", () => auth.signOut().then(() => window.location.href = "login.html"));
 
 function escapeHTML(str) {
@@ -106,7 +101,6 @@ async function renderRentStatus(uid) {
   const now = new Date();
   const { start, end } = currentMonthRange();
 
-  // Lease hasn't started yet — nothing owed.
   if (tenantProfile.leaseStartDate) {
     const leaseStart = new Date(tenantProfile.leaseStartDate);
     if (!isNaN(leaseStart) && leaseStart > now) {
@@ -134,7 +128,6 @@ async function renderRentStatus(uid) {
   let statusLine = "";
 
   if (paidThisMonth) {
-    // Show next month's due date once this month is settled.
     dueDate = new Date(now.getFullYear(), now.getMonth() + 1, dueDay);
     statusClass = "is-paid";
     statusLine = `<span class="pill pill-verified">Paid for this month</span>`;
@@ -288,7 +281,6 @@ paymentForm.addEventListener("submit", async (e) => {
   submitBtn.textContent = "Submitting...";
 
   try {
-    // Duplicate check: same transaction code shouldn't be submitted twice.
     const dupe = await db.collection("payments").where("transactionCode", "==", parsed.transactionCode).get();
     if (!dupe.empty) {
       errorBox.textContent = "This payment has already been submitted.";
@@ -336,12 +328,88 @@ paymentForm.addEventListener("submit", async (e) => {
 // Status lifecycle: open -> in_progress -> resolved -> closed
 // "resolved" is a staff claim, not a fact — the tenant gets the final
 // word. From "resolved" they either confirm (-> closed, done) or say
-// it's still broken (-> back to open, with their note attached so
-// staff isn't guessing why it bounced back).
+// it's still broken (-> back to open).
+//
+// Every request also has a maintenanceRequests/{id}/comments subcollection
+// for the ongoing back-and-forth, so nothing gets silently overwritten
+// the way the old single staffNote/tenantNote fields used to.
 function maintenancePillFor(status) {
   const map = { open: "pill-pending", in_progress: "pill-pending", resolved: "pill-awaiting", closed: "pill-verified" };
   const label = { open: "Open", in_progress: "In Progress", resolved: "Awaiting Your Confirmation", closed: "Closed" };
   return `<span class="pill ${map[status] || "pill-pending"}">${label[status] || status}</span>`;
+}
+
+function commentBubbleHTML(c) {
+  const isStaff = c.author === "staff";
+  const when = c.createdAt && c.createdAt.toDate
+    ? c.createdAt.toDate().toLocaleString("en-KE", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+    : "";
+  return `
+    <div class="comment-bubble ${isStaff ? "comment-staff" : "comment-tenant"}">
+      <div class="comment-author">${escapeHTML(c.authorName || (isStaff ? "Office" : "You"))}</div>
+      <div class="comment-text">${escapeHTML(c.message)}</div>
+      <div class="comment-time">${when}</div>
+    </div>`;
+}
+
+async function refreshThread(id) {
+  const container = document.getElementById(`thread-${id}`);
+  if (!container) return;
+  const snap = await db.collection("maintenanceRequests").doc(id).collection("comments").orderBy("createdAt", "asc").get();
+  const messagesHTML = snap.empty
+    ? `<p class="empty-state" style="padding:8px 0;">No messages yet — send one below.</p>`
+    : snap.docs.map((d) => commentBubbleHTML(d.data())).join("");
+
+  container.innerHTML = `
+    <div class="comment-thread">${messagesHTML}</div>
+    <div class="comment-input-row">
+      <textarea id="comment-input-${id}" placeholder="Write a message to the office..."></textarea>
+      <button class="btn btn-outline" data-send-comment="${id}">Send</button>
+    </div>`;
+
+  container.querySelector(`[data-send-comment="${id}"]`).addEventListener("click", () => sendComment(id));
+}
+
+async function sendComment(id) {
+  const input = document.getElementById(`comment-input-${id}`);
+  const message = input ? input.value.trim() : "";
+  if (!message) return;
+  const sendBtn = document.querySelector(`[data-send-comment="${id}"]`);
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    await db.collection("maintenanceRequests").doc(id).collection("comments").add({
+      author: "tenant",
+      authorName: tenantProfile.name,
+      message,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    addNotification("staff", "maintenance_comment", `${tenantProfile.name} sent a message about their maintenance request.`);
+    if (input) input.value = "";
+    await refreshThread(id);
+  } catch (err) {
+    alert("Couldn't send: " + err.message);
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+  }
+}
+
+function openThread(id) {
+  expandedThreads.add(id);
+  const container = document.getElementById(`thread-${id}`);
+  const toggleBtn = document.querySelector(`[data-thread-toggle="${id}"]`);
+  if (!container) return;
+  container.style.display = "block";
+  container.innerHTML = `<p class="empty-state" style="padding:8px 0;">Loading&hellip;</p>`;
+  if (toggleBtn) toggleBtn.textContent = "Hide Conversation";
+  refreshThread(id);
+}
+
+function closeThread(id) {
+  expandedThreads.delete(id);
+  const container = document.getElementById(`thread-${id}`);
+  const toggleBtn = document.querySelector(`[data-thread-toggle="${id}"]`);
+  if (container) container.style.display = "none";
+  if (toggleBtn) toggleBtn.textContent = "View Conversation";
 }
 
 function maintenanceCardHTML(doc) {
@@ -364,6 +432,13 @@ function maintenanceCardHTML(doc) {
       </div>
     </div>` : "";
 
+  // Bug fix: the office note used to stay visible forever, even after the
+  // tenant reopened the request and the note no longer reflected reality.
+  // It now only shows while the request is genuinely in "resolved" state.
+  const staffNoteHTML = (m.staffNote && m.status === "resolved")
+    ? `<div class="card-sub" style="margin-top:6px;"><strong>Office note:</strong> ${escapeHTML(m.staffNote)}</div>`
+    : "";
+
   return `
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
@@ -371,11 +446,13 @@ function maintenanceCardHTML(doc) {
           <span class="chip">${escapeHTML(m.category || "Other")}</span>
           <div class="card-sub" style="margin-top:8px;">${escapeHTML(m.description || "")}</div>
           <div class="card-sub" style="margin-top:4px;">Reported ${when}</div>
-          ${m.staffNote ? `<div class="card-sub" style="margin-top:6px;"><strong>Office note:</strong> ${escapeHTML(m.staffNote)}</div>` : ""}
+          ${staffNoteHTML}
         </div>
         ${maintenancePillFor(m.status)}
       </div>
       ${confirmBlockHTML}
+      <button class="comment-toggle" data-thread-toggle="${doc.id}">View Conversation</button>
+      <div class="comment-panel" id="thread-${doc.id}" style="display:none;"></div>
     </div>`;
 }
 
@@ -414,6 +491,9 @@ function loadMaintenance(uid) {
         });
       });
 
+      // Reopening now posts the tenant's note into the shared comment
+      // thread (instead of a standalone field), so staff actually see it
+      // and it doesn't go stale once the status changes again.
       maintenanceList.querySelectorAll("[data-mtn-reopen-submit]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const id = btn.dataset.mtnReopenSubmit;
@@ -423,17 +503,41 @@ function loadMaintenance(uid) {
           try {
             const doc = snapshot.docs.find((d) => d.id === id);
             const m = doc ? doc.data() : {};
+
             await db.collection("maintenanceRequests").doc(id).update({
               status: "open",
-              tenantNote: note || null,
               reopenedAt: firebase.firestore.FieldValue.serverTimestamp()
             });
+
+            if (note) {
+              await db.collection("maintenanceRequests").doc(id).collection("comments").add({
+                author: "tenant",
+                authorName: tenantProfile.name,
+                message: note,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+            }
+
             addNotification("staff", "maintenance_reopened", `${tenantProfile.name} says the ${(m.category || "").toLowerCase() || "reported"} issue isn't fixed${unitProfile ? " at " + unitProfile.houseNumber : ""}.`);
+            expandedThreads.add(id);
           } catch (err) {
             alert("Couldn't send: " + err.message);
             btn.disabled = false;
           }
         });
+      });
+
+      maintenanceList.querySelectorAll("[data-thread-toggle]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = btn.dataset.threadToggle;
+          if (expandedThreads.has(id)) closeThread(id); else openThread(id);
+        });
+      });
+
+      // Re-expand any threads the tenant already had open before this
+      // re-render (e.g. triggered by a status change elsewhere).
+      expandedThreads.forEach((id) => {
+        if (document.getElementById(`thread-${id}`)) openThread(id);
       });
     }, (err) => {
       console.error(err);
