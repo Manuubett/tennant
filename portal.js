@@ -277,10 +277,50 @@ paymentForm.addEventListener("submit", async (e) => {
 // ---------------------------------------------------------------------
 // MAINTENANCE REQUESTS
 // ---------------------------------------------------------------------
+// Status lifecycle: open -> in_progress -> resolved -> closed
+// "resolved" is a staff claim, not a fact — the tenant gets the final
+// word. From "resolved" they either confirm (-> closed, done) or say
+// it's still broken (-> back to open, with their note attached so
+// staff isn't guessing why it bounced back).
 function maintenancePillFor(status) {
-  const map = { open: "pill-pending", in_progress: "pill-pending", resolved: "pill-verified" };
-  const label = { open: "Open", in_progress: "In Progress", resolved: "Resolved" };
+  const map = { open: "pill-pending", in_progress: "pill-pending", resolved: "pill-awaiting", closed: "pill-verified" };
+  const label = { open: "Open", in_progress: "In Progress", resolved: "Awaiting Your Confirmation", closed: "Closed" };
   return `<span class="pill ${map[status] || "pill-pending"}">${label[status] || status}</span>`;
+}
+
+function maintenanceCardHTML(doc) {
+  const m = doc.data();
+  const when = m.submittedAt && m.submittedAt.toDate ? m.submittedAt.toDate().toLocaleDateString("en-KE", { day: "numeric", month: "short" }) : "";
+
+  const confirmBlockHTML = m.status === "resolved" ? `
+    <div class="maintenance-confirm">
+      <div class="card-sub"><strong>The office marked this as resolved.</strong> Is it fixed?</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-primary" data-mtn-confirm-fixed="${doc.id}">Yes, it's fixed</button>
+        <button class="btn btn-outline" data-mtn-reopen-toggle="${doc.id}">Still broken</button>
+      </div>
+      <div class="maintenance-reopen-form" id="reopen-form-${doc.id}" style="display:none;">
+        <div class="field">
+          <label>What's still wrong? (optional)</label>
+          <textarea id="reopen-note-${doc.id}" placeholder="e.g. still leaking, just slower now"></textarea>
+        </div>
+        <button class="btn btn-outline" data-mtn-reopen-submit="${doc.id}">Send Back to Office</button>
+      </div>
+    </div>` : "";
+
+  return `
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+        <div>
+          <span class="chip">${escapeHTML(m.category || "Other")}</span>
+          <div class="card-sub" style="margin-top:8px;">${escapeHTML(m.description || "")}</div>
+          <div class="card-sub" style="margin-top:4px;">Reported ${when}</div>
+          ${m.staffNote ? `<div class="card-sub" style="margin-top:6px;"><strong>Office note:</strong> ${escapeHTML(m.staffNote)}</div>` : ""}
+        </div>
+        ${maintenancePillFor(m.status)}
+      </div>
+      ${confirmBlockHTML}
+    </div>`;
 }
 
 function loadMaintenance(uid) {
@@ -292,22 +332,53 @@ function loadMaintenance(uid) {
         maintenanceList.innerHTML = `<p class="empty-state">No maintenance requests yet.</p>`;
         return;
       }
-      maintenanceList.innerHTML = snapshot.docs.map((doc) => {
-        const m = doc.data();
-        const when = m.submittedAt && m.submittedAt.toDate ? m.submittedAt.toDate().toLocaleDateString("en-KE", { day: "numeric", month: "short" }) : "";
-        return `
-          <div class="card">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
-              <div>
-                <span class="chip">${escapeHTML(m.category || "Other")}</span>
-                <div class="card-sub" style="margin-top:8px;">${escapeHTML(m.description || "")}</div>
-                <div class="card-sub" style="margin-top:4px;">Reported ${when}</div>
-                ${m.staffNote ? `<div class="card-sub" style="margin-top:6px;"><strong>Office note:</strong> ${escapeHTML(m.staffNote)}</div>` : ""}
-              </div>
-              ${maintenancePillFor(m.status)}
-            </div>
-          </div>`;
-      }).join("");
+      maintenanceList.innerHTML = snapshot.docs.map(maintenanceCardHTML).join("");
+
+      maintenanceList.querySelectorAll("[data-mtn-confirm-fixed]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.dataset.mtnConfirmFixed;
+          btn.disabled = true;
+          try {
+            await db.collection("maintenanceRequests").doc(id).update({
+              status: "closed",
+              closedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          } catch (err) {
+            alert("Couldn't update: " + err.message);
+            btn.disabled = false;
+          }
+        });
+      });
+
+      maintenanceList.querySelectorAll("[data-mtn-reopen-toggle]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const id = btn.dataset.mtnReopenToggle;
+          const form = document.getElementById(`reopen-form-${id}`);
+          if (form) form.style.display = form.style.display === "none" ? "block" : "none";
+        });
+      });
+
+      maintenanceList.querySelectorAll("[data-mtn-reopen-submit]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.dataset.mtnReopenSubmit;
+          const noteField = document.getElementById(`reopen-note-${id}`);
+          const note = noteField ? noteField.value.trim() : "";
+          btn.disabled = true;
+          try {
+            const doc = snapshot.docs.find((d) => d.id === id);
+            const m = doc ? doc.data() : {};
+            await db.collection("maintenanceRequests").doc(id).update({
+              status: "open",
+              tenantNote: note || null,
+              reopenedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            addNotification("staff", "maintenance_reopened", `${tenantProfile.name} says the ${(m.category || "").toLowerCase() || "reported"} issue isn't fixed${unitProfile ? " at " + unitProfile.houseNumber : ""}.`);
+          } catch (err) {
+            alert("Couldn't send: " + err.message);
+            btn.disabled = false;
+          }
+        });
+      });
     }, (err) => {
       console.error(err);
       maintenanceList.innerHTML = `<p class="empty-state">Couldn't load maintenance requests.</p>`;
