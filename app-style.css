@@ -171,6 +171,7 @@ svg { display: block; }
 .card:has(.pill-verified) { border-left: 3px solid var(--green); }
 .card:has(.pill-rejected) { border-left: 3px solid var(--red); }
 .card:has(.pill-mismatch) { border-left: 4px solid var(--red); }
+.card:has(.pill-awaiting) { border-left: 3px solid var(--pink); }
 
 /* ---------- Status pill ---------- */
 .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px; letter-spacing: .01em; }
@@ -178,6 +179,12 @@ svg { display: block; }
 .pill-verified { background: var(--green-tint); color: var(--green); }
 .pill-rejected { background: var(--red-tint); color: var(--red); }
 .pill-mismatch { background: var(--red-tint); color: var(--red); }
+.pill-neutral { background: #e6e9f0; color: var(--ink-soft); }
+/* "The ball's in your court" — a maintenance request marked resolved by
+   staff but not yet confirmed by the tenant. Uses the brand pink so it
+   reads as distinctly different from "amber = staff still working on it"
+   and "green = fully done". */
+.pill-awaiting { background: var(--pink-tint); color: var(--pink-dark); }
 
 /* ---------- Payment history rows ---------- */
 .payment-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); gap: 10px; font-size: 13.5px; font-variant-numeric: tabular-nums; }
@@ -254,6 +261,42 @@ svg { display: block; }
 /* ---------- Category chip (maintenance) ---------- */
 .chip { display: inline-block; font-size: 11px; font-weight: 600; color: var(--ink-soft); background: var(--bg); border: 1px solid var(--border); padding: 3px 9px; border-radius: 999px; }
 
+/* ---------- Maintenance confirm / reopen flow (tenant portal) ---------- */
+/* Shown on a request card once staff marks it "resolved" — the tenant
+   either confirms it's fixed or sends it back with a note. */
+.maintenance-confirm { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.maintenance-confirm .card-sub { margin-bottom: 10px; }
+.maintenance-confirm .btn, .maintenance-reopen-form .btn { width: auto; padding: 8px 16px; font-size: 13px; }
+.maintenance-confirm .btn-outline, .maintenance-reopen-form .btn-outline { padding: 7px 14px; }
+
+.maintenance-reopen-form {
+    margin-top: 10px; padding: 12px 14px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.maintenance-reopen-form .field { margin-bottom: 8px; }
+.maintenance-reopen-form textarea { min-height: 64px; font-family: var(--font-sans); font-size: 13.5px; }
+
+/* Staff-side note showing why a tenant sent a "resolved" request back */
+.maintenance-tenant-note { margin-top: 6px; }
+.maintenance-tenant-note strong { color: var(--ink); }
+
+/* ---------- Collapsible "add / record" panels (staff dashboard) ---------- */
+/* Used for Add Landlord, Add Unit, Record a Deposit and Record Payment —
+   sits above the list, collapsed by default, expands on click instead of
+   the form permanently taking up space at the bottom of a long page. */
+.collapse-panel { padding: 16px 20px; transition: border-color .15s ease, box-shadow .15s ease; }
+.collapse-panel-toggle {
+    display: flex; align-items: center; justify-content: space-between; width: 100%;
+    background: none; border: none; cursor: pointer; padding: 0; text-align: left; font: inherit;
+}
+.collapse-panel-toggle .card-title { margin: 0; transition: color .15s ease; }
+.collapse-panel-toggle:hover .card-title { color: var(--pink-dark); }
+.collapse-chevron { color: var(--ink-faint); transition: transform .15s ease, color .15s ease; }
+.collapse-panel.open { border-color: var(--pink); box-shadow: 0 0 0 1px var(--pink-tint); }
+.collapse-panel.open .collapse-chevron { color: var(--pink); }
+.collapse-panel-body { overflow: hidden; transition: margin-top .15s ease; }
+.collapse-panel-body form .btn { margin-top: 4px; }
+
 /* ---------- Receipt (printable popup) ---------- */
 .receipt-page { max-width: 420px; margin: 32px auto; font-family: var(--font-sans); color: var(--ink); padding: 0 16px; }
 .receipt-card { background: #fff; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 28px 26px; }
@@ -282,11 +325,11 @@ svg { display: block; }
     * { transition: none !important; }
 }
 /* ---------- Table toolbar (search) ---------- */
-.table-toolbar { margin-bottom: 12px; }
+.table-toolbar { margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .table-search {
     position: relative; display: flex; align-items: center;
     background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--radius-sm);
-    padding: 0 12px; max-width: 360px;
+    padding: 0 12px; max-width: 360px; flex: 1;
 }
 .table-search svg { width: 16px; height: 16px; color: var(--ink-faint); flex-shrink: 0; }
 .table-search input {
@@ -334,7 +377,6 @@ svg { display: block; }
     .data-table td[data-label=""]::before { content: none; }
     .table-actions { justify-content: flex-start; margin-top: 8px; }
 }
-.pill-neutral { background: #e6e9f0; color: var(--ink-soft); }
 
 .data-table td[data-label="Status"] { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 @media (max-width: 720px) {
