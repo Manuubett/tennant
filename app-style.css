@@ -4,7 +4,7 @@
     --pink-tint: #fdeef6;
     --ink: #10233f;
     --ink-soft: #4b5c72;
-    --ink-faint: #8c99ac;
+    --ink-faint: #7c8aa0;
     --border: #e4e9f0;
     --bg: #f5f7fa;
     --surface: #ffffff;
@@ -14,6 +14,8 @@
     --amber-tint: #fdf3e0;
     --red: #b42323;
     --red-tint: #fdeaea;
+    --violet: #6b46c1;
+    --violet-tint: #f1ecfb;
     --sidebar-bg: #0e1e38;
     --sidebar-bg-soft: #16305a;
     --sidebar-line: rgba(255,255,255,.08);
@@ -75,8 +77,10 @@ svg { display: block; }
 .tabs#tabs .tab-btn::after { content: none; }
 .tabs#tabs .tab-btn svg { width: 17px; height: 17px; flex-shrink: 0; opacity: .85; }
 .tabs#tabs .tab-btn:hover { background: rgba(255,255,255,.06); color: #fff; }
-.tabs#tabs .tab-btn.active { background: var(--pink); color: #fff; }
-.tabs#tabs .tab-btn.active svg { opacity: 1; }
+/* Active nav item uses a translucent pink wash rather than solid brand
+   pink, so it doesn't visually compete with primary-action buttons. */
+.tabs#tabs .tab-btn.active { background: rgba(230,0,126,.14); color: #ffffff; }
+.tabs#tabs .tab-btn.active svg { opacity: 1; color: #ff6fb8; }
 
 .sidebar-foot { padding: 14px 20px 18px; border-top: 1px solid var(--sidebar-line); }
 /* Base logout button — used on its own in a light topbar (tenant portal).
@@ -108,7 +112,7 @@ svg { display: block; }
     position: sticky; top: 0; z-index: 20; border-bottom: 1px solid var(--border);
 }
 .app-header .header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.app-header h1 { font-size: 16px; margin: 0; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); }
+.app-header h1 { font-size: 18px; margin: 0; font-weight: 800; letter-spacing: -0.01em; color: var(--ink); }
 
 .menu-btn {
     display: none; background: none; border: 1px solid var(--border); color: var(--ink-soft);
@@ -134,10 +138,17 @@ svg { display: block; }
     font-size: 14.5px; color: var(--ink); font-weight: 400; width: 100%; background: #fff;
     transition: border-color .15s ease, box-shadow .15s ease;
 }
-.field textarea { resize: vertical; min-height: 90px; font-family: var(--font-mono); font-size: 13.5px; }
+/* Default textareas stay sans-serif; only the M-Pesa paste box (below)
+   uses monospace, since a typewriter font on a plain description field
+   (e.g. maintenance requests) reads oddly. */
+.field textarea { resize: vertical; min-height: 90px; font-family: var(--font-sans); font-size: 14.5px; }
 .field input:focus, .field select:focus, .field textarea:focus {
     outline: none; border-color: var(--pink); box-shadow: 0 0 0 3px var(--pink-tint);
 }
+
+/* M-Pesa confirmation paste box — monospace helps the tenant visually
+   verify transaction codes / amounts against their SMS. */
+.textarea-mpesa { font-family: var(--font-mono); font-size: 13.5px; min-height: 90px; }
 
 /* ---------- Searchable dropdown (property picker) ---------- */
 .search-results {
@@ -171,17 +182,33 @@ svg { display: block; }
 .alert-error { background: var(--red-tint); color: var(--red); }
 .alert-success { background: var(--green-tint); color: var(--green); }
 
+/* ---------- Section headings (used above Payment History, Maintenance, etc.) ---------- */
+.section-title {
+    font-weight: 700;
+    font-size: 16px;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+    margin: 0 0 10px;
+}
+
 /* ---------- Cards ---------- */
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 18px 20px; margin-bottom: 12px; }
-.card-title { font-weight: 700; font-size: 15px; color: var(--ink); margin-bottom: 4px; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 18px 20px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 2px rgba(16,35,63,.04), 0 1px 3px rgba(16,35,63,.03);
+}
+.card-title { font-weight: 700; font-size: 15px; color: var(--ink); margin-bottom: 4px; letter-spacing: -0.01em; }
 .card-sub { color: var(--ink-soft); font-size: 13px; line-height: 1.5; }
 
 /* Status is scannable at a glance via a left border, not just a small pill */
 .card:has(.pill-pending) { border-left: 3px solid var(--amber); }
 .card:has(.pill-verified) { border-left: 3px solid var(--green); }
 .card:has(.pill-rejected) { border-left: 3px solid var(--red); }
-.card:has(.pill-mismatch) { border-left: 4px solid var(--red); }
-.card:has(.pill-awaiting) { border-left: 3px solid var(--pink); }
+.card:has(.pill-mismatch) { border-left: 3px solid var(--red); }
+.card:has(.pill-awaiting) { border-left: 3px solid var(--violet); }
 
 /* ---------- Status pill ---------- */
 .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px; letter-spacing: .01em; }
@@ -190,7 +217,10 @@ svg { display: block; }
 .pill-rejected { background: var(--red-tint); color: var(--red); }
 .pill-mismatch { background: var(--red-tint); color: var(--red); }
 .pill-neutral { background: #e6e9f0; color: var(--ink-soft); }
-.pill-awaiting { background: var(--pink-tint); color: var(--pink-dark); }
+/* "Awaiting" uses a distinct violet rather than brand pink, so it doesn't
+   visually compete with buttons/links/active nav that use pink for
+   actions. */
+.pill-awaiting { background: var(--violet-tint); color: var(--violet); }
 
 /* ---------- Payment history rows ---------- */
 .payment-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); gap: 10px; font-size: 13.5px; font-variant-numeric: tabular-nums; }
@@ -356,8 +386,25 @@ svg { display: block; }
     html { scroll-behavior: auto; }
 }
 
-/* ---------- Tenant portal section nav (anchor targets under sticky header) ---------- */
-.portal-section { scroll-margin-top: calc(var(--topbar-h) + 14px); }
+/* ---------- Tenant portal: real tab switching ---------- */
+/* Only the section with .active is shown — sidebar links and any
+   [data-goto-section] button toggle this via portal.js. Replaces the old
+   "everything visible, scroll to anchor" behavior. */
+.portal-section { display: none; scroll-margin-top: calc(var(--topbar-h) + 14px); }
+.portal-section.active { display: block; animation: sectionFadeIn .15s ease; }
+@keyframes sectionFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---------- Quick actions (Overview tab) ---------- */
+.quick-actions-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.quick-action-btn {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg); border: 1.5px solid var(--border); color: var(--ink);
+    font-size: 13px; font-weight: 600; padding: 10px 14px; border-radius: var(--radius-sm);
+    cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.quick-action-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+.quick-action-btn:hover { background: var(--pink-tint); border-color: var(--pink); color: var(--pink-dark); }
+
 /* ---------- Table toolbar (search) ---------- */
 .table-toolbar { margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .table-search {
@@ -416,18 +463,4 @@ svg { display: block; }
 @media (max-width: 720px) {
     .data-table td[data-label="Status"] { display: block; }
     .data-table td[data-label="Status"] .pill { margin-right: 5px; }
-}/* Only show the active portal section */
-.portal-section { display: none; }
-.portal-section.active { display: block; animation: sectionFadeIn .15s ease; }
-@keyframes sectionFadeIn { from { opacity: 0; } to { opacity: 1; } }
-
-/* Quick actions row (Overview tab) */
-.quick-actions-row { display: flex; gap: 10px; flex-wrap: wrap; }
-.quick-action-btn {
-    display: flex; align-items: center; gap: 8px;
-    background: var(--bg); border: 1.5px solid var(--border); color: var(--ink);
-    font-size: 13px; font-weight: 600; padding: 10px 14px; border-radius: var(--radius-sm);
-    cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease;
 }
-.quick-action-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
-.quick-action-btn:hover { background: var(--pink-tint); border-color: var(--pink); color: var(--pink-dark); }
