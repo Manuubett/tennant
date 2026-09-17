@@ -1349,8 +1349,29 @@ async function renderSettingsTab() {
 function renderReportsTab() {
   const landlordOptions = `<option value="">All Landlords</option>` +
     landlordsCache.map((doc) => `<option value="${doc.id}">${doc.data().name}</option>`).join("");
+  // The Word report is always for one specific property, so no "All" option here.
+  const propertyOptions = landlordsCache.map((doc) => `<option value="${doc.id}">${doc.data().name}</option>`).join("");
+
+  const now = new Date();
+  const defaultMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
   contentBox.innerHTML = `
+    ${collapsePanelHTML({
+      id: "property-report-panel",
+      title: "Monthly Property Report",
+      collapsedLabel: "+ Monthly Property Report (Word)",
+      expandedLabel: "Monthly Property Report (Word)",
+      bodyHTML: `
+        <div class="card-sub" style="margin-bottom:14px;">Generates the per-property monthly rent-roll statement — unit-by-unit rent, tenant, payment and arrears, plus a commission summary and deposit-refund table — as a downloadable Word document.</div>
+        <form id="property-report-form">
+          <div class="field"><label>Property / Landlord</label><select name="landlordId" required>${propertyOptions}</select></div>
+          <div class="field"><label>Month</label><input type="month" name="month" value="${defaultMonth}" required></div>
+          <div class="field"><label>Garbage Fee Collected This Month (KSh)</label><input type="number" name="garbageFee" min="0" value="0"></div>
+          <div class="field"><label>Recommendations</label><textarea name="recommendations" placeholder="e.g. We recommend reducing of the prices and repainting of the premises"></textarea></div>
+          <button type="submit" class="btn btn-primary" id="property-report-submit">Generate Word Report</button>
+          <p class="alert alert-error" id="property-report-error" style="display:none;"></p>
+        </form>`
+    })}
     <div class="card">
       <div class="field"><label>Filter by Landlord</label><select id="report-landlord">${landlordOptions}</select></div>
       <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
@@ -1362,10 +1383,284 @@ function renderReportsTab() {
     </div>
     <div id="report-output"></div>`;
 
+  wireCollapsePanel("property-report-panel", { collapsedLabel: "+ Monthly Property Report (Word)", expandedLabel: "Monthly Property Report (Word)" });
+
   document.getElementById("btn-rent-roll").addEventListener("click", showRentRoll);
   document.getElementById("btn-arrears").addEventListener("click", showArrears);
   document.getElementById("btn-commission").addEventListener("click", showCommissionStatement);
   document.getElementById("btn-export").addEventListener("click", exportCSV);
+
+  const reportForm = document.getElementById("property-report-form");
+  const reportError = document.getElementById("property-report-error");
+  const reportSubmit = document.getElementById("property-report-submit");
+  reportForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    reportError.style.display = "none";
+    const data = new FormData(reportForm);
+    reportSubmit.disabled = true;
+    reportSubmit.textContent = "Generating...";
+    try {
+      await generatePropertyReportDocx(data.get("landlordId"), data.get("month"), data.get("garbageFee"), data.get("recommendations"));
+    } catch (err) {
+      reportError.textContent = "Couldn't generate report: " + err.message;
+      reportError.style.display = "block";
+    } finally {
+      reportSubmit.disabled = false;
+      reportSubmit.textContent = "Generate Word Report";
+    }
+  });
+}
+
+// ---------------------------------------------------------------------
+// MONTHLY PROPERTY REPORT (Word/.docx)
+// ---------------------------------------------------------------------
+// Mirrors the paper rent-roll format: HSE NO / UNIT LABEL / UNITS /
+// H2O METRES / RENT PAYABLE / NAME / CONTACT / <month> / DATE-T.CODE /
+// ARR, a commission summary, a deposit-refund table, and a free-text
+// recommendations line. Built client-side with the `docx` library
+// (loaded globally as `window.docx` — see dashboard.html) and downloaded
+// the same way exportCSV() already downloads a CSV, just as a .docx blob.
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+function monthRangeFromInput(monthStr) {
+  // monthStr is "YYYY-MM" from <input type="month">
+  const [y, m] = monthStr.split("-").map(Number);
+  return { start: new Date(y, m - 1, 1), end: new Date(y, m, 1), year: y, monthIndex: m - 1 };
+}
+
+async function buildPropertyReportData(landlordId, monthStr, garbageFee) {
+  const landlordDoc = landlordsCache.find((d) => d.id === landlordId);
+  if (!landlordDoc) throw new Error("Please choose a property.");
+  const { start, end, year, monthIndex } = monthRangeFromInput(monthStr);
+
+  const propertyUnits = unitsCache
+    .filter((d) => d.data().landlordId === landlordId)
+    .sort((a, b) => (a.data().houseNumber || "").localeCompare(b.data().houseNumber || "", undefined, { numeric: true }));
+
+  // Reuses the existing status+submittedAt composite index (same one
+  // showRentRoll/showArrears/showCommissionStatement already rely on)
+  // rather than requiring a new landlordId+status+submittedAt index —
+  // filtering to this property's units happens client-side below.
+  const paymentsSnap = await db.collection("payments")
+    .where("status", "==", "verified")
+    .where("submittedAt", ">=", start)
+    .where("submittedAt", "<", end)
+    .get();
+
+  const unitIds = new Set(propertyUnits.map((d) => d.id));
+  const paymentsByUnit = {};
+  paymentsSnap.docs.forEach((doc) => {
+    const p = doc.data();
+    if (!unitIds.has(p.unitId)) return;
+    (paymentsByUnit[p.unitId] = paymentsByUnit[p.unitId] || []).push(p);
+  });
+
+  // Deposits has no per-landlord composite index either — it's a small
+  // collection, so pulling it whole and filtering here avoids needing one.
+  const depositsSnap = await db.collection("deposits").get();
+  const allDeposits = depositsSnap.docs.map((d) => d.data());
+  const depositsCollected = allDeposits.filter((d) => d.landlordId === landlordId && (d.paidAt || "").startsWith(monthStr));
+  const depositsRefunded = allDeposits.filter((d) => d.landlordId === landlordId && d.status === "refunded"
+    && d.refundedAt && d.refundedAt.toDate && d.refundedAt.toDate() >= start && d.refundedAt.toDate() < end);
+
+  const configDoc = await db.doc("settings/commission").get();
+  const config = configDoc.exists ? configDoc.data() : { commissionRate: 0.06, cleaningFee: 2000 };
+
+  const rows = propertyUnits.map((doc, i) => {
+    const u = doc.data();
+    const vacant = u.occupancy === "vacant";
+    const tenantDoc = !vacant ? tenantsCache.find((t) => t.data().unitId === doc.id) : null;
+    const t = tenantDoc ? tenantDoc.data() : null;
+    const unitPayments = paymentsByUnit[doc.id] || [];
+    const totalPaid = unitPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    // NOTE: assumes tenant contact is stored as `contact`, `phone`, or
+    // `phoneNumber` on the tenant doc — none of these fields appear in
+    // portal.js/dashboard.js today, so confirm the real field name.
+    const contact = t ? (t.contact || t.phone || t.phoneNumber || "—") : "—";
+    const rentAmount = Number(u.rentAmount || 0);
+    return {
+      hseNo: i + 1,
+      unitLabel: u.houseNumber || "",
+      unitType: u.unitType || "",
+      waterMeter: u.waterMeterNumber || "",
+      rentAmount,
+      name: vacant ? "V" : (t ? t.name || "—" : "—"),
+      contact: vacant ? "V" : contact,
+      monthCell: vacant ? "V" : (totalPaid > 0 ? totalPaid : "NP"),
+      dateCode: unitPayments.map((p) => `${p.paidAtRaw || ""}/${p.transactionCode || "Manual"}`).join("\n"),
+      arr: !vacant && totalPaid < rentAmount ? rentAmount - totalPaid : 0
+    };
+  });
+
+  const totalRentPayable = rows.reduce((s, r) => s + r.rentAmount, 0);
+  const totalCollected = rows.reduce((s, r) => s + (typeof r.monthCell === "number" ? r.monthCell : 0), 0);
+  const commissionable = totalCollected;
+  const commission = Math.round(commissionable * config.commissionRate);
+  const cleaningFee = Number(config.cleaningFee || 0);
+
+  return {
+    landlordName: landlordDoc.data().name,
+    propertyName: propertyUnits[0] ? propertyUnits[0].data().propertyName || "" : "",
+    monthLabel: `${MONTH_NAMES[monthIndex]} ${year}`,
+    monthShort: MONTH_NAMES[monthIndex].slice(0, 3).toUpperCase(),
+    rows,
+    totalRentPayable,
+    totalCollected,
+    garbageFee: Number(garbageFee || 0),
+    totalDepositsCollected: depositsCollected.reduce((s, d) => s + Number(d.amountPaid || 0), 0),
+    commissionable,
+    commissionRate: config.commissionRate,
+    commission,
+    cleaningFee,
+    totalAgentFees: commission + cleaningFee,
+    depositsRefunded: depositsRefunded.map((d) => ({
+      tenantName: d.tenantName || "",
+      unitLabel: unitLabel(d.unitId),
+      totalDeposit: Number(d.amountPaid || 0),
+      deductions: Number(d.deductions || 0),
+      amountRefundable: Number(d.amountRefundable || 0)
+    }))
+  };
+}
+
+async function generatePropertyReportDocx(landlordId, monthStr, garbageFee, recommendations) {
+  if (typeof docx === "undefined") {
+    throw new Error("The report generator didn't load — check your internet connection and reload the page.");
+  }
+  const data = await buildPropertyReportData(landlordId, monthStr, garbageFee);
+
+  const {
+    Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+    WidthType, AlignmentType, BorderStyle, ShadingType, PageOrientation
+  } = docx;
+
+  const thinBorder = { style: BorderStyle.SINGLE, size: 2, color: "999999" };
+  const borders = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
+
+  function headerCell(text, width) {
+    return new TableCell({
+      width: { size: width, type: WidthType.DXA },
+      borders,
+      shading: { type: ShadingType.CLEAR, fill: "F5F7FA" },
+      children: [new Paragraph({ children: [new TextRun({ text: String(text), bold: true, size: 18 })] })]
+    });
+  }
+  function bodyCell(text, width, opts = {}) {
+    const lines = String(text).split("\n");
+    return new TableCell({
+      width: { size: width, type: WidthType.DXA },
+      borders,
+      children: lines.map((line) => new Paragraph({ children: [new TextRun({ text: line, size: 18, bold: !!opts.bold, color: opts.color })] }))
+    });
+  }
+
+  const colWidths = [700, 1000, 900, 1100, 1200, 1800, 1300, 1100, 1800, 900];
+  const headerRow = new TableRow({
+    children: ["HSE NO", "UNIT LABEL", "UNITS", "H2O METRES", "RENT PAYABLE", "NAME", "CONTACT", data.monthShort, "DATE/T.CODE", "ARR"]
+      .map((label, i) => headerCell(label, colWidths[i]))
+  });
+  const dataRows = data.rows.map((r) => new TableRow({
+    children: [
+      bodyCell(r.hseNo, colWidths[0]),
+      bodyCell(r.unitLabel, colWidths[1]),
+      bodyCell(r.unitType, colWidths[2]),
+      bodyCell(r.waterMeter, colWidths[3]),
+      bodyCell(money(r.rentAmount), colWidths[4]),
+      bodyCell(r.name, colWidths[5]),
+      bodyCell(r.contact, colWidths[6]),
+      bodyCell(typeof r.monthCell === "number" ? money(r.monthCell) : r.monthCell, colWidths[7]),
+      bodyCell(r.dateCode, colWidths[8]),
+      bodyCell(r.arr ? money(r.arr) : "", colWidths[9], { color: "B42323", bold: true })
+    ]
+  }));
+  const totalsRow = new TableRow({
+    children: [
+      headerCell("TOTAL", colWidths[0]), headerCell("", colWidths[1]), headerCell("", colWidths[2]), headerCell("", colWidths[3]),
+      headerCell(money(data.totalRentPayable), colWidths[4]), headerCell("", colWidths[5]), headerCell("", colWidths[6]),
+      headerCell(money(data.totalCollected), colWidths[7]), headerCell("", colWidths[8]), headerCell("", colWidths[9])
+    ]
+  });
+  const mainTable = new Table({
+    width: { size: colWidths.reduce((a, b) => a + b, 0), type: WidthType.DXA },
+    columnWidths: colWidths,
+    rows: [headerRow, ...dataRows, totalsRow]
+  });
+
+  function summaryRow(label, value, opts = {}) {
+    return new TableRow({ children: [bodyCell(label, 4500, { bold: true }), bodyCell(value, 2500, opts)] });
+  }
+  const summaryTable = new Table({
+    width: { size: 7000, type: WidthType.DXA },
+    columnWidths: [4500, 2500],
+    rows: [
+      summaryRow("TOTAL RENT COLLECTED", money(data.totalCollected)),
+      summaryRow("GARBAGE", money(data.garbageFee)),
+      summaryRow("TOTAL DEPOSIT COLLECTED", money(data.totalDepositsCollected)),
+      summaryRow("AMOUNT COMMISSIONABLE", money(data.commissionable)),
+      summaryRow(`SANEFI COMMISSION (${(data.commissionRate * 100).toFixed(1)}%)`, money(data.commission)),
+      summaryRow("CLEANING", money(data.cleaningFee)),
+      summaryRow("AMOUNT DUE TO AGENT", money(data.totalAgentFees), { bold: true })
+    ]
+  });
+
+  const refundColWidths = [1800, 1200, 1600, 1600, 1700];
+  const refundHeader = new TableRow({
+    children: ["TENANT NAME", "HSE NO", "TOTAL DEPOSIT PAID", "DEDUCTIONS", "AMOUNT REFUNDABLE"]
+      .map((label, i) => headerCell(label, refundColWidths[i]))
+  });
+  const refundRows = data.depositsRefunded.length
+    ? data.depositsRefunded.map((d) => new TableRow({
+        children: [
+          bodyCell(d.tenantName, refundColWidths[0]),
+          bodyCell(d.unitLabel, refundColWidths[1]),
+          bodyCell(money(d.totalDeposit), refundColWidths[2]),
+          bodyCell(money(d.deductions), refundColWidths[3]),
+          bodyCell(money(d.amountRefundable), refundColWidths[4])
+        ]
+      }))
+    : [new TableRow({ children: [bodyCell("No deposit refunds processed this month.", refundColWidths.reduce((a, b) => a + b, 0))] })];
+  const refundTable = new Table({
+    width: { size: refundColWidths.reduce((a, b) => a + b, 0), type: WidthType.DXA },
+    columnWidths: refundColWidths,
+    rows: [refundHeader, ...refundRows]
+  });
+
+  const doc = new Document({
+    sections: [{
+      properties: { page: { size: { width: 11906, height: 16838 }, orientation: PageOrientation.LANDSCAPE } },
+      children: [
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 200 },
+          children: [new TextRun({
+            text: `${data.landlordName}${data.propertyName ? " | " + data.propertyName : ""} | ${data.monthLabel.toUpperCase()} REPORT`,
+            bold: true, size: 26
+          })]
+        }),
+        mainTable,
+        new Paragraph({ text: "", spacing: { after: 200 } }),
+        summaryTable,
+        new Paragraph({ text: "", spacing: { after: 200 } }),
+        new Paragraph({
+          spacing: { after: 240 },
+          children: [new TextRun({ text: "KEY: H-HOUSE | W-WATER | LL-LANDLORD | NP-NOT PAID | V-VACANT", bold: true, underline: {}, color: "B42323", size: 18 })]
+        }),
+        new Paragraph({ spacing: { after: 120 }, children: [new TextRun({ text: "DEPOSIT REFUND", bold: true, size: 22 })] }),
+        refundTable,
+        new Paragraph({ text: "", spacing: { after: 240 } }),
+        new Paragraph({ spacing: { after: 100 }, children: [new TextRun({ text: "RECOMMENDATIONS", bold: true, size: 22 })] }),
+        new Paragraph({ children: [new TextRun({ text: recommendations || "—", size: 20 })] })
+      ]
+    }]
+  });
+
+  const blob = await Packer.toBlob(doc);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${data.landlordName.replace(/\s+/g, "_")}-${monthStr}-report.docx`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 async function showCommissionStatement() {
