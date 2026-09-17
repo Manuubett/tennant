@@ -65,6 +65,10 @@
 <script src="notifications.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<!-- Word (.docx) report generation — exposes the global `docx` object
+     (Document, Packer, Paragraph, Table, ...) used by
+     generatePropertyReportDocx() in dashboard.js. Pinned to 9.7.1. -->
+<script src="https://cdn.jsdelivr.net/npm/docx@9.7.1/dist/index.iife.js"></script>
 <script src="dashboard.js"></script>
 <script>
   // Off-canvas sidebar for mobile — purely presentational, independent of dashboard.js logic
