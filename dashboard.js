@@ -18,6 +18,11 @@ let tenantsCache = [];
 let viewingTenantId = null;
 let overviewCharts = {};
 
+// Tracks which maintenance request threads are currently expanded on the
+// tenant-profile view, so they stay open across re-renders (e.g. after
+// marking a request resolved). Mirrors the same pattern in portal.js.
+const expandedThreads = new Set();
+
 // Bug fix: onSnapshot listeners (Payments, Deposits tabs) were never
 // unsubscribed when switching tabs, so navigating back and forth stacked
 // up duplicate listeners. Every listener-based tab pushes its unsubscribe
@@ -710,10 +715,86 @@ async function renderTenantsTab() {
   document.getElementById("tenant-search").addEventListener("input", (e) => paintRows(e.target.value));
 }
 
+// Status lifecycle mirrors portal.js exactly: open -> in_progress ->
+// resolved -> closed (or back to open if the tenant reopens it). "resolved"
+// is a staff claim awaiting the tenant's confirmation, not a final state —
+// "closed" is what the tenant actually confirming fixed looks like.
 function maintenanceStatusPill(status) {
-  const map = { open: "pill-pending", in_progress: "pill-pending", resolved: "pill-verified" };
-  const label = { open: "Open", in_progress: "In Progress", resolved: "Resolved" };
+  const map = { open: "pill-pending", in_progress: "pill-pending", resolved: "pill-awaiting", closed: "pill-verified" };
+  const label = { open: "Open", in_progress: "In Progress", resolved: "Awaiting Tenant Confirmation", closed: "Closed" };
   return `<span class="pill ${map[status] || "pill-pending"}">${label[status] || status}</span>`;
+}
+
+function commentBubbleHTML(c) {
+  const isStaff = c.author === "staff";
+  const when = c.createdAt && c.createdAt.toDate
+    ? c.createdAt.toDate().toLocaleString("en-KE", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+    : "";
+  return `
+    <div class="comment-bubble ${isStaff ? "comment-staff" : "comment-tenant"}">
+      <div class="comment-author">${escapeHTML(c.authorName || (isStaff ? "Office" : "Tenant"))}</div>
+      <div class="comment-text">${escapeHTML(c.message)}</div>
+      <div class="comment-time">${when}</div>
+    </div>`;
+}
+
+async function refreshThread(id) {
+  const container = document.getElementById(`thread-${id}`);
+  if (!container) return;
+  const snap = await db.collection("maintenanceRequests").doc(id).collection("comments").orderBy("createdAt", "asc").get();
+  const messagesHTML = snap.empty
+    ? `<p class="empty-state" style="padding:8px 0;">No messages yet — send one below.</p>`
+    : snap.docs.map((d) => commentBubbleHTML(d.data())).join("");
+
+  container.innerHTML = `
+    <div class="comment-thread">${messagesHTML}</div>
+    <div class="comment-input-row">
+      <textarea id="comment-input-${id}" placeholder="Reply to the tenant..."></textarea>
+      <button class="btn btn-outline" data-send-comment="${id}">Send</button>
+    </div>`;
+
+  container.querySelector(`[data-send-comment="${id}"]`).addEventListener("click", () => sendComment(id));
+}
+
+async function sendComment(id) {
+  const input = document.getElementById(`comment-input-${id}`);
+  const message = input ? input.value.trim() : "";
+  if (!message) return;
+  const sendBtn = document.querySelector(`[data-send-comment="${id}"]`);
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    await db.collection("maintenanceRequests").doc(id).collection("comments").add({
+      author: "staff",
+      authorName: "Office",
+      message,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    if (input) input.value = "";
+    await refreshThread(id);
+  } catch (err) {
+    alert("Couldn't send: " + err.message);
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+  }
+}
+
+function openThread(id) {
+  expandedThreads.add(id);
+  const container = document.getElementById(`thread-${id}`);
+  const toggleBtn = document.querySelector(`[data-thread-toggle="${id}"]`);
+  if (!container) return;
+  container.style.display = "block";
+  container.innerHTML = `<p class="empty-state" style="padding:8px 0;">Loading&hellip;</p>`;
+  if (toggleBtn) toggleBtn.textContent = "Hide Conversation";
+  refreshThread(id);
+}
+
+function closeThread(id) {
+  expandedThreads.delete(id);
+  const container = document.getElementById(`thread-${id}`);
+  const toggleBtn = document.querySelector(`[data-thread-toggle="${id}"]`);
+  if (container) container.style.display = "none";
+  if (toggleBtn) toggleBtn.textContent = "View Conversation";
 }
 
 async function renderTenantProfile(tenantId) {
@@ -750,9 +831,15 @@ async function renderTenantProfile(tenantId) {
     return `<div class="payment-row"><div><div class="amount">${money(p.amount)}</div><div class="meta">${p.paidAtRaw || ""}</div></div><span class="pill pill-${p.status}">${p.status}</span></div>`;
   }).join("");
 
+  // Bug fix: action buttons used to be gated on `status !== "resolved"`,
+  // which is also true for "closed" — so a request the tenant already
+  // confirmed fixed still showed a "Mark Resolved" button. Buttons now
+  // only appear while the request is actually actionable by staff
+  // (open or in_progress); once it's resolved it's the tenant's turn,
+  // and once it's closed there's nothing left to do.
   const maintenanceHTML = maintenanceSnap.empty ? `<p class="empty-state">No maintenance requests.</p>` : maintenanceSnap.docs.map((doc) => {
     const m = doc.data();
-    const actions = m.status !== "resolved" ? `
+    const actions = (m.status === "open" || m.status === "in_progress") ? `
       ${m.status === "open" ? `<button class="btn btn-outline" style="width:auto; padding:7px 14px; font-size:12.5px;" data-mtn-action="in_progress" data-mtn-id="${doc.id}">Mark In Progress</button>` : ""}
       <button class="btn btn-primary" style="width:auto; padding:7px 14px; font-size:12.5px;" data-mtn-action="resolved" data-mtn-id="${doc.id}">Mark Resolved</button>` : "";
     return `
@@ -763,6 +850,8 @@ async function renderTenantProfile(tenantId) {
           ${maintenanceStatusPill(m.status)}
           <div style="display:flex; gap:6px;">${actions}</div>
         </div>
+        <button class="comment-toggle" data-thread-toggle="${doc.id}">View Conversation</button>
+        <div class="comment-panel" id="thread-${doc.id}" style="display:none;"></div>
       </div>`;
   }).join("");
 
@@ -828,6 +917,19 @@ async function renderTenantProfile(tenantId) {
         btn.disabled = false;
       }
     });
+  });
+
+  contentBox.querySelectorAll("[data-thread-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.threadToggle;
+      if (expandedThreads.has(id)) closeThread(id); else openThread(id);
+    });
+  });
+
+  // Re-expand any threads staff already had open before this re-render
+  // (e.g. triggered by marking a request resolved).
+  expandedThreads.forEach((id) => {
+    if (document.getElementById(`thread-${id}`)) openThread(id);
   });
 }
 
