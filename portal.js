@@ -305,7 +305,11 @@ paymentForm.addEventListener("submit", async (e) => {
 
     const recipientMatch = landlordProfile ? checkRecipientMatch(parsed, landlordProfile) : false;
 
-    await db.collection("payments").add({
+    // Bug fix / feature: the new payment doc's own id wasn't captured
+    // before, so the "payment_submitted" notification had no way to
+    // reference which payment it was about. Capturing the ref here lets
+    // reply.js (click-to-navigate) send staff straight to this tenant.
+    const paymentRef = await db.collection("payments").add({
       tenantId: auth.currentUser.uid,
       unitId: tenantProfile.unitId,
       landlordId: tenantProfile.landlordId,
@@ -320,7 +324,7 @@ paymentForm.addEventListener("submit", async (e) => {
       submittedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
 
-    addNotification("staff", "payment_submitted", `${tenantProfile.name} submitted a payment of KSh ${Number(parsed.amount || 0).toLocaleString()}.`);
+    addNotification("staff", "payment_submitted", `${tenantProfile.name} submitted a payment of KSh ${Number(parsed.amount || 0).toLocaleString()}.`, { tenantId: auth.currentUser.uid, paymentId: paymentRef.id });
 
     successBox.textContent = "Payment submitted! It will show as verified once the office confirms it.";
     successBox.style.display = "block";
@@ -396,7 +400,7 @@ async function sendComment(id) {
       message,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    addNotification("staff", "maintenance_comment", `${tenantProfile.name} sent a message about their maintenance request.`);
+    addNotification("staff", "maintenance_comment", `${tenantProfile.name} sent a message about their maintenance request.`, { tenantId: auth.currentUser.uid, maintenanceRequestId: id });
     if (input) input.value = "";
     await refreshThread(id);
   } catch (err) {
@@ -531,7 +535,7 @@ function loadMaintenance(uid) {
               });
             }
 
-            addNotification("staff", "maintenance_reopened", `${tenantProfile.name} says the ${(m.category || "").toLowerCase() || "reported"} issue isn't fixed${unitProfile ? " at " + unitProfile.houseNumber : ""}.`);
+            addNotification("staff", "maintenance_reopened", `${tenantProfile.name} says the ${(m.category || "").toLowerCase() || "reported"} issue isn't fixed${unitProfile ? " at " + unitProfile.houseNumber : ""}.`, { tenantId: auth.currentUser.uid, maintenanceRequestId: id });
             expandedThreads.add(id);
           } catch (err) {
             alert("Couldn't send: " + err.message);
@@ -571,7 +575,11 @@ maintenanceForm.addEventListener("submit", async (e) => {
   maintenanceSubmitBtn.textContent = "Submitting...";
 
   try {
-    await db.collection("maintenanceRequests").add({
+    // Bug fix / feature: the new request's own id wasn't captured
+    // before, so the "maintenance_submitted" notification had no way to
+    // reference which request it was about. Capturing the ref lets
+    // reply.js send staff straight to this tenant's expanded thread.
+    const reqRef = await db.collection("maintenanceRequests").add({
       tenantId: auth.currentUser.uid,
       unitId: tenantProfile.unitId,
       landlordId: tenantProfile.landlordId,
@@ -581,7 +589,7 @@ maintenanceForm.addEventListener("submit", async (e) => {
       submittedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
 
-    addNotification("staff", "maintenance_submitted", `${tenantProfile.name} reported a ${category.toLowerCase()} issue${unitProfile ? " at " + unitProfile.houseNumber : ""}.`);
+    addNotification("staff", "maintenance_submitted", `${tenantProfile.name} reported a ${category.toLowerCase()} issue${unitProfile ? " at " + unitProfile.houseNumber : ""}.`, { tenantId: auth.currentUser.uid, maintenanceRequestId: reqRef.id });
 
     maintenanceSuccess.textContent = "Request submitted. The office will follow up.";
     maintenanceSuccess.style.display = "block";
