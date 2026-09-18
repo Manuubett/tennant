@@ -18,6 +18,7 @@
 // update SECTION_IDS below to match — everything else here is
 // independent of the exact ids used.
 const SECTION_IDS = {
+  overview: "overview",
   payments: "payments",
   maintenance: "maintenance"
 };
@@ -124,6 +125,9 @@ window.onNotificationClick = function (notif, notifId) {
     case "maintenance_update":
     case "maintenance_comment":
       goToMaintenanceThread(rel.maintenanceRequestId);
+      break;
+    case "tenant_approved":
+      activatePortalSection(SECTION_IDS.overview);
       break;
     default:
       break;
