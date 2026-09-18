@@ -161,10 +161,26 @@ function isOverdue(tenant, paidUnitIds) {
   return now > dueDate;
 }
 
+let cachesLoadedOnce = false;
+
 async function renderActiveTab() {
   clearActiveListeners();
-  contentBox.innerHTML = `<p class="empty-state">Loading&hellip;</p>`;
+  // Bug fix: this used to blank the whole panel to "Loading..." and
+  // re-fetch all 3 collections on EVERY tab click, including clicking
+  // back to a tab you were already on a second ago. Now the loading
+  // skeleton only shows on the very first load; later switches keep
+  // whatever's currently on screen visible while refreshCaches() runs
+  // quietly in the background, then swap in the new tab once ready.
+  if (!cachesLoadedOnce) {
+    contentBox.innerHTML = `<p class="empty-state">Loading&hellip;</p>`;
+  }
+  const tabAtStart = activeTab;
   await refreshCaches();
+  cachesLoadedOnce = true;
+  // If the user clicked to a different tab while this fetch was in
+  // flight, that later click already called renderActiveTab() itself —
+  // let that one win instead of this stale one overwriting it.
+  if (activeTab !== tabAtStart) return;
   if (activeTab === "overview") renderOverviewTab();
   else if (activeTab === "payments") renderPaymentsTab();
   else if (activeTab === "tenants") renderTenantsTab();
@@ -559,7 +575,7 @@ function renderPaymentsTab() {
             await db.collection("payments").doc(id).update({ status });
             if (status === "verified" && paymentDoc && paymentDoc.data().tenantId) {
               const amt = Number(paymentDoc.data().amount || 0).toLocaleString();
-              addNotification(paymentDoc.data().tenantId, "payment_verified", `Your payment of KSh ${amt} has been verified.`);
+              addNotification(paymentDoc.data().tenantId, "payment_verified", `Your payment of KSh ${amt} has been verified.`, { paymentId: id });
             }
           } catch (err) {
             alert("Couldn't update: " + err.message);
@@ -700,13 +716,29 @@ async function renderTenantsTab() {
         <td data-label="Landlord">${escapeHTML(r.landlord)}</td>
         <td data-label="Status"><span class="pill ${r.status === "pending" ? "pill-pending" : "pill-verified"}">${escapeHTML(r.status)}</span></td>
         <td data-label="Arrears">${r.overdue ? `<span class="badge-arrears">Arrears</span>` : `<span class="cell-muted">&mdash;</span>`}</td>
-        <td data-label="" class="table-actions"><button class="btn-table-action" data-view-tenant="${r.id}">View Details</button></td>
+        <td data-label="" class="table-actions">
+          ${r.status === "pending" ? `<button class="btn-table-action" data-approve-tenant="${r.id}">Approve</button>` : ""}
+          <button class="btn-table-action" data-view-tenant="${r.id}">View Details</button>
+        </td>
       </tr>`).join("");
 
     tbody.querySelectorAll("[data-view-tenant]").forEach((btn) => {
       btn.addEventListener("click", () => {
         viewingTenantId = btn.dataset.viewTenant;
         renderTenantsTab();
+      });
+    });
+
+    tbody.querySelectorAll("[data-approve-tenant]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          await approveTenant(btn.dataset.approveTenant);
+          renderActiveTab();
+        } catch (err) {
+          alert("Couldn't approve: " + err.message);
+          btn.disabled = false;
+        }
       });
     });
   }
@@ -769,6 +801,13 @@ async function sendComment(id) {
       message,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
+    // Bug fix: staff replies never notified the tenant — only the
+    // tenant->staff direction fired a notification, so a tenant had no
+    // way to know the office had answered unless they checked back.
+    const reqDoc = await db.collection("maintenanceRequests").doc(id).get();
+    if (reqDoc.exists && reqDoc.data().tenantId) {
+      addNotification(reqDoc.data().tenantId, "maintenance_comment", "The office replied to your maintenance request.", { maintenanceRequestId: id });
+    }
     if (input) input.value = "";
     await refreshThread(id);
   } catch (err) {
@@ -910,7 +949,7 @@ async function renderTenantProfile(tenantId) {
           staffNote: staffNote || null,
           resolvedAt: status === "resolved" ? firebase.firestore.FieldValue.serverTimestamp() : null
         });
-        addNotification(tenantId, "maintenance_update", `Your maintenance request is now ${status === "in_progress" ? "in progress" : "resolved"}.`);
+        addNotification(tenantId, "maintenance_update", `Your maintenance request is now ${status === "in_progress" ? "in progress" : "resolved"}.`, { maintenanceRequestId: id });
         renderTenantProfile(tenantId);
       } catch (err) {
         alert("Couldn't update: " + err.message);
