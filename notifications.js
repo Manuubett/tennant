@@ -2,6 +2,13 @@
 // A notification's "audience" is either the string "staff" (any staff member
 // can see and dismiss it) or a tenant's uid (only that tenant sees it).
 // Requires `db` (Firestore) and `firebase` to already be loaded on the page.
+//
+// `relatedId` (optional 4th arg to addNotification) carries whatever IDs the
+// click-to-navigate feature in reply.js needs — e.g. { tenantId,
+// maintenanceRequestId } or { paymentId }. This file doesn't interpret it at
+// all; it's just stored and handed back on click via the onNotificationClick
+// hook below, so notifications.js stays generic and reply.js owns the
+// "what does this notification mean" logic.
 
 function addNotification(audience, type, message, relatedId) {
   return db.collection("notifications").add({
@@ -38,6 +45,14 @@ function attachNotificationBell(buttonEl, panelEl, audience) {
         badge.remove();
       }
 
+      // Bug fix: message text was inserted into innerHTML unescaped — a
+      // maintenance description or tenant name containing HTML would
+      // execute as markup instead of displaying as text. `escapeHTML` is
+      // defined globally by dashboard.js/portal.js, both of which load
+      // before any notification data can actually arrive (this callback
+      // only fires once Firestore responds, well after page scripts have
+      // all executed), so it's safe to rely on here despite notifications.js
+      // itself loading earlier in the page.
       panelEl.innerHTML = snapshot.empty
         ? `<p class="empty-state">No notifications yet.</p>`
         : snapshot.docs.map((doc) => {
@@ -47,7 +62,7 @@ function attachNotificationBell(buttonEl, panelEl, audience) {
               : "";
             return `
               <div class="notif-row ${n.read ? "" : "unread"}" data-id="${doc.id}">
-                <div class="notif-msg">${n.message}</div>
+                <div class="notif-msg">${escapeHTML(n.message)}</div>
                 <div class="notif-time">${when}</div>
               </div>`;
           }).join("");
@@ -55,6 +70,15 @@ function attachNotificationBell(buttonEl, panelEl, audience) {
       panelEl.querySelectorAll(".notif-row").forEach((row) => {
         row.addEventListener("click", () => {
           db.collection("notifications").doc(row.dataset.id).update({ read: true }).catch(() => {});
+
+          // Hand off to reply.js (if loaded) to jump straight into whatever
+          // this notification is about. notifications.js doesn't know or
+          // care what that means — it just passes the stored doc through.
+          const doc = snapshot.docs.find((d) => d.id === row.dataset.id);
+          if (doc && typeof window.onNotificationClick === "function") {
+            window.onNotificationClick(doc.data(), doc.id);
+          }
+          panelEl.classList.remove("open");
         });
       });
     }, (err) => {
