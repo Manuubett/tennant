@@ -115,15 +115,60 @@ function renderTabs() {
   });
 }
 
-async function refreshCaches() {
-  const [landlordSnap, unitSnap, tenantSnap] = await Promise.all([
-    db.collection("landlords").orderBy("name").get(),
-    db.collection("units").get(),
-    db.collection("tenants").orderBy("name").get()
-  ]);
-  landlordsCache = landlordSnap.docs;
-  unitsCache = unitSnap.docs;
-  tenantsCache = tenantSnap.docs;
+// ---------------------------------------------------------------------
+// LIVE CACHES (landlords / units / tenants)
+// ---------------------------------------------------------------------
+// These three collections used to be re-fetched in full — three
+// complete collection reads — on every single tab click, including
+// clicking back to a tab you were already on a second ago. Firestore's
+// onSnapshot already solves exactly this: it delivers one full snapshot
+// up front, then pushes only the documents that actually changed after
+// that. So these are now set up ONCE for the life of the page, and every
+// tab render just reads whatever's currently sitting in the cache
+// instead of awaiting a fresh fetch. As a bonus, changes another staff
+// member makes now show up here live, without anyone needing to switch
+// tabs to trigger a refetch.
+let cachesReady = { landlords: false, units: false, tenants: false };
+let liveCachesStarted = false;
+
+function allCachesReady() {
+  return cachesReady.landlords && cachesReady.units && cachesReady.tenants;
+}
+
+function startLiveCaches(onFirstReady) {
+  if (liveCachesStarted) return;
+  liveCachesStarted = true;
+  let notifiedFirstReady = false;
+
+  function handleUpdate(key) {
+    cachesReady[key] = true;
+    if (!notifiedFirstReady) {
+      if (allCachesReady()) {
+        notifiedFirstReady = true;
+        if (onFirstReady) onFirstReady();
+      }
+      return;
+    }
+    // Caveat: like the existing Payments/Deposits onSnapshot handlers,
+    // this re-renders whichever tab is currently open in full. If staff
+    // have an "Add X" panel open with unsaved text when someone else's
+    // change comes in, that in-progress input gets cleared — the same
+    // tradeoff those two tabs already accept today.
+    renderActiveTab();
+  }
+
+  db.collection("landlords").orderBy("name").onSnapshot((snap) => {
+    landlordsCache = snap.docs;
+    handleUpdate("landlords");
+  });
+  db.collection("units").onSnapshot((snap) => {
+    unitsCache = snap.docs;
+    handleUpdate("units");
+  });
+  db.collection("tenants").orderBy("name").onSnapshot((snap) => {
+    tenantsCache = snap.docs;
+    handleUpdate("tenants");
+  });
 }
 
 function landlordName(id) {
@@ -161,26 +206,14 @@ function isOverdue(tenant, paidUnitIds) {
   return now > dueDate;
 }
 
-let cachesLoadedOnce = false;
-
-async function renderActiveTab() {
+function renderActiveTab() {
   clearActiveListeners();
-  // Bug fix: this used to blank the whole panel to "Loading..." and
-  // re-fetch all 3 collections on EVERY tab click, including clicking
-  // back to a tab you were already on a second ago. Now the loading
-  // skeleton only shows on the very first load; later switches keep
-  // whatever's currently on screen visible while refreshCaches() runs
-  // quietly in the background, then swap in the new tab once ready.
-  if (!cachesLoadedOnce) {
+  // Caches are kept live by startLiveCaches() (see above) — this only
+  // waits on the very first load, before any snapshot has arrived yet.
+  if (!allCachesReady()) {
     contentBox.innerHTML = `<p class="empty-state">Loading&hellip;</p>`;
+    return;
   }
-  const tabAtStart = activeTab;
-  await refreshCaches();
-  cachesLoadedOnce = true;
-  // If the user clicked to a different tab while this fetch was in
-  // flight, that later click already called renderActiveTab() itself —
-  // let that one win instead of this stale one overwriting it.
-  if (activeTab !== tabAtStart) return;
   if (activeTab === "overview") renderOverviewTab();
   else if (activeTab === "payments") renderPaymentsTab();
   else if (activeTab === "tenants") renderTenantsTab();
@@ -1922,25 +1955,31 @@ auth.onAuthStateChanged(async (user) => {
     return;
   }
 
-  const [pendingSnap, tenantSnap, unitsSnap, paidUnitIds] = await Promise.all([
-    db.collection("payments").where("status", "==", "pending").get(),
-    db.collection("tenants").get(),
-    db.collection("units").get(),
-    getPaidUnitIdsThisMonth()
-  ]);
-  const overdueCount = tenantSnap.docs.filter((d) => isOverdue(d.data(), paidUnitIds)).length;
-  const occupiedCount = unitsSnap.docs.filter((d) => d.data().occupancy !== "vacant").length;
-  const vacantCount = unitsSnap.size - occupiedCount;
+  contentBox.innerHTML = `<p class="empty-state">Loading&hellip;</p>`;
 
-  statRow.innerHTML = `
-    <div class="stat-box"><div class="num">${pendingSnap.size}</div><div class="label">Pending Payments</div></div>
-    <div class="stat-box"><div class="num">${tenantSnap.size}</div><div class="label">Total Tenants</div></div>
-    <div class="stat-box"><div class="num">${occupiedCount}</div><div class="label">Occupied Units</div></div>
-    <div class="stat-box"><div class="num">${vacantCount}</div><div class="label">Vacant Units</div></div>
-    <div class="stat-box"><div class="num">${overdueCount}</div><div class="label">Overdue This Month</div></div>`;
+  // Bug fix: this used to run a second, separate .get() on
+  // tenants/units just to compute the stat row, duplicating the exact
+  // reads startLiveCaches() was about to make anyway. Now it waits for
+  // the live caches' first snapshot and reads the same in-memory data.
+  startLiveCaches(async () => {
+    const [pendingSnap, paidUnitIds] = await Promise.all([
+      db.collection("payments").where("status", "==", "pending").get(),
+      getPaidUnitIdsThisMonth()
+    ]);
+    const overdueCount = tenantsCache.filter((d) => isOverdue(d.data(), paidUnitIds)).length;
+    const occupiedCount = unitsCache.filter((d) => d.data().occupancy !== "vacant").length;
+    const vacantCount = unitsCache.length - occupiedCount;
 
-  renderTabs();
-  renderActiveTab();
+    statRow.innerHTML = `
+      <div class="stat-box"><div class="num">${pendingSnap.size}</div><div class="label">Pending Payments</div></div>
+      <div class="stat-box"><div class="num">${tenantsCache.length}</div><div class="label">Total Tenants</div></div>
+      <div class="stat-box"><div class="num">${occupiedCount}</div><div class="label">Occupied Units</div></div>
+      <div class="stat-box"><div class="num">${vacantCount}</div><div class="label">Vacant Units</div></div>
+      <div class="stat-box"><div class="num">${overdueCount}</div><div class="label">Overdue This Month</div></div>`;
+
+    renderTabs();
+    renderActiveTab();
+  });
 
   const notifBtn = document.getElementById("notif-btn");
   const notifPanel = document.getElementById("notif-panel");
