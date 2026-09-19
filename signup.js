@@ -6,18 +6,40 @@ const landlordIdInput = document.getElementById("landlord-id-input");
 const landlordResults = document.getElementById("landlord-results");
 const unitSelect = document.getElementById("unit-select");
 
-let allUnits = []; // { id, houseNumber, propertyName, landlordId, landlordName }
+let allUnits = []; // { id, houseNumber, propertyName, landlordId, landlordName, occupancy, claimed }
 let searchIndex = []; // combined, deduplicated list of things a tenant might search by
 
-// Load landlords + units once up front, then build one combined search
-// index covering BOTH landlord names and property names — a tenant might
-// know either one, not necessarily both.
+// Load landlords + units + tenants once up front, then build one
+// combined search index covering BOTH landlord names and property names
+// — a tenant might know either one, not necessarily both.
+//
+// Bug fix: the unit dropdown used to list every unit under a property
+// regardless of whether it was already occupied, so two tenants could
+// both select and register for the same unit. Units are now annotated
+// with two signals so selectItem() can filter properly:
+//   - occupancy: the units.occupancy field staff set/toggle directly,
+//     or that approveTenant() (dashboard.js) sets to "occupied" once a
+//     tenant is approved.
+//   - claimed: whether ANY tenant doc (pending or active) already
+//     points at this unit. This closes the gap where a tenant has
+//     signed up and picked a unit, but staff haven't approved them yet
+//     — occupancy is still "vacant" at that point, so relying on
+//     occupancy alone would still let a second tenant claim the same
+//     unit during the pending window.
 Promise.all([
   db.collection("landlords").orderBy("name").get(),
-  db.collection("units").get()
-]).then(([landlordSnap, unitSnap]) => {
+  db.collection("units").get(),
+  db.collection("tenants").get()
+]).then(([landlordSnap, unitSnap, tenantSnap]) => {
   const landlordsById = {};
   landlordSnap.docs.forEach((doc) => { landlordsById[doc.id] = doc.data().name; });
+
+  const claimedUnitIds = new Set(
+    tenantSnap.docs
+      .map((doc) => doc.data())
+      .filter((t) => t.unitId)
+      .map((t) => t.unitId)
+  );
 
   allUnits = unitSnap.docs.map((doc) => {
     const u = doc.data();
@@ -26,7 +48,9 @@ Promise.all([
       houseNumber: u.houseNumber,
       propertyName: u.propertyName || "",
       landlordId: u.landlordId,
-      landlordName: landlordsById[u.landlordId] || "Unknown"
+      landlordName: landlordsById[u.landlordId] || "Unknown",
+      occupancy: u.occupancy || "vacant",
+      claimed: claimedUnitIds.has(doc.id)
     };
   });
 
@@ -105,13 +129,27 @@ function selectItem(item) {
     return true;
   });
 
+  // Bug fix: only offer units that are actually free — excludes units
+  // staff have marked "occupied" AND units already claimed by another
+  // tenant's signup (pending or approved), even before staff have had a
+  // chance to flip that unit's occupancy field. See the comment on the
+  // Promise.all(...) load above for why both checks are needed.
+  const availableUnits = matchingUnits.filter((u) => u.occupancy !== "occupied" && !u.claimed);
+
   if (matchingUnits.length === 0) {
     unitSelect.innerHTML = `<option value="">No units listed here yet</option>`;
     unitSelect.disabled = true;
     return;
   }
+
+  if (availableUnits.length === 0) {
+    unitSelect.innerHTML = `<option value="">All units here are already taken — contact the office</option>`;
+    unitSelect.disabled = true;
+    return;
+  }
+
   unitSelect.innerHTML = `<option value="">Select your unit</option>` +
-    matchingUnits.map((u) => `<option value="${u.id}">${escapeHTML(u.houseNumber)}${u.propertyName ? " — " + escapeHTML(u.propertyName) : ""}</option>`).join("");
+    availableUnits.map((u) => `<option value="${u.id}">${escapeHTML(u.houseNumber)}${u.propertyName ? " — " + escapeHTML(u.propertyName) : ""}</option>`).join("");
   unitSelect.disabled = false;
 }
 
@@ -147,6 +185,17 @@ form.addEventListener("submit", async (e) => {
 
   if (!landlordIdInput.value) {
     errorBox.textContent = "Please choose your property from the list.";
+    errorBox.style.display = "block";
+    return;
+  }
+
+  const selectedUnit = allUnits.find((u) => u.id === unitSelect.value);
+  if (unitSelect.value && selectedUnit && (selectedUnit.occupancy === "occupied" || selectedUnit.claimed)) {
+    // Defends against the unit being claimed by someone else in the
+    // (short) window between this page loading and this form being
+    // submitted — the dropdown filter above handles the normal case,
+    // this catches the race.
+    errorBox.textContent = "That unit was just taken by another tenant. Please refresh and pick a different one, or contact the office.";
     errorBox.style.display = "block";
     return;
   }
