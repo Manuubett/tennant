@@ -125,12 +125,20 @@ landlordSearch.addEventListener("input", () => {
   renderResults(landlordSearch.value);
 });
 
-// Close the results panel when clicking elsewhere on the page.
+// Close the results panel when clicking anywhere outside the search box
+// and the results panel itself.
+//
+// Bug fix: this used to bail out early unless the click landed inside
+// SOME .field element on the page (`if (!e.target.closest(".field"))
+// return;`), so clicking the page background, the header, a submit
+// button, or anything else outside a .field wrapper left the dropdown
+// open indefinitely — it only ever closed if the click happened to land
+// on a different form field by coincidence. The check now does exactly
+// what the comment always said: close on any click that isn't on the
+// search input or the results panel.
 document.addEventListener("click", (e) => {
-  if (!e.target.closest(".field")) return;
-  if (!landlordSearch.contains(e.target) && !landlordResults.contains(e.target)) {
-    landlordResults.style.display = "none";
-  }
+  if (landlordSearch.contains(e.target) || landlordResults.contains(e.target)) return;
+  landlordResults.style.display = "none";
 });
 
 form.addEventListener("submit", async (e) => {
