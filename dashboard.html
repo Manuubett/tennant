@@ -113,8 +113,11 @@
 <script src="notifications.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<!-- Monthly property report (Word) — exposes window.docx -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/docx/8.5.0/docx.umd.min.js"></script>
+<!-- Monthly property report (Word) — exposes window.docx.
+     Using jsdelivr (mirrors npm directly) instead of cdnjs: cdnjs's
+     mirror of recent docx.js releases has been unreliable about
+     exposing window.docx as a browser global. -->
+<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js" onerror="window.__docxLoadFailed = true;"></script>
 <!-- "All Properties" bundles one .docx per property into a single zip -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="dashboard.js"></script>
