@@ -56,6 +56,18 @@ const COLORS = {
 
 const money = (n) => `KSh ${Number(n || 0).toLocaleString()}`;
 
+// Hides and removes the full-screen splash (logo + spinner) shown while
+// the dashboard's first data load is in flight. Called once the stat
+// row and initial tab have actually been rendered — see the
+// startLiveCaches(...) callback at the bottom of this file.
+function hideLoadingOverlay() {
+  const overlay = document.getElementById("app-loading-overlay");
+  if (overlay) {
+    overlay.classList.add("hidden");
+    setTimeout(() => overlay.remove(), 400);
+  }
+}
+
 // Applied once so every chart on the page shares consistent typography
 // and grid styling instead of Chart.js defaults.
 (function configureChartDefaults() {
@@ -1457,8 +1469,7 @@ function renderReportsTab() {
       bodyHTML: `
         <div class="card-sub" style="margin-bottom:14px;">Generates the per-property monthly rent-roll statement — unit-by-unit rent, tenant, payment and arrears, plus a commission summary and deposit-refund table — as a downloadable Word document.</div>
         <form id="property-report-form">
-        <div class="field"><label>Property / Landlord</label><select name="landlordId"><option value="">All Properties (one .docx per property, zipped)</option>${propertyOptions}</select></div>
-          
+          <div class="field"><label>Property / Landlord</label><select name="landlordId"><option value="">All Properties (one .docx per property, zipped)</option>${propertyOptions}</select></div>
           <div class="field"><label>Month</label><input type="month" name="month" value="${defaultMonth}" required></div>
           <div class="field"><label>Garbage Fee Collected This Month (KSh)</label><input type="number" name="garbageFee" min="0" value="0"><small>When generating for All Properties, this same figure is applied to every property — edit individual reports afterward if they actually differ.</small></div>
           <div class="field"><label>Recommendations</label><textarea name="recommendations" placeholder="e.g. We recommend reducing of the prices and repainting of the premises"></textarea><small>When generating for All Properties, this same note is applied to every property.</small></div>
@@ -1980,6 +1991,7 @@ auth.onAuthStateChanged(async (user) => {
 
     renderTabs();
     renderActiveTab();
+    hideLoadingOverlay();
   });
 
   const notifBtn = document.getElementById("notif-btn");
