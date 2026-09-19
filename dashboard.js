@@ -1,3 +1,4 @@
+
 const statRow = document.getElementById("stat-row");
 const tabsBox = document.getElementById("tabs");
 const contentBox = document.getElementById("tab-content");
@@ -745,6 +746,17 @@ async function renderTenantsTab() {
 
   paintRows("");
   document.getElementById("tenant-search").addEventListener("input", (e) => paintRows(e.target.value));
+}
+
+// Approves a tenant whose signup is pending review, so they can start
+// using the portal normally. Called from the "Approve" button in the
+// Tenants tab. Assumes tenant docs use status: "pending" -> "active"
+// (matches the pill logic above: anything other than "pending" renders
+// as pill-verified). Update the literal below if your signup flow uses
+// a different status string.
+async function approveTenant(tenantId) {
+  await db.collection("tenants").doc(tenantId).update({ status: "active" });
+  addNotification(tenantId, "tenant_approved", "Your account has been approved.", {});
 }
 
 // Status lifecycle mirrors portal.js exactly: open -> in_progress ->
