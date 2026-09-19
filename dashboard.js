@@ -1772,7 +1772,15 @@ function buildPropertyReportDocument(data, recommendations) {
 
 function checkDocxLoaded() {
   if (typeof docx === "undefined") {
-    throw new Error("The report generator didn't load — check your internet connection and reload the page.");
+    // Distinguishes "the script request itself failed" (network/ad-blocker/
+    // extension — window.__docxLoadFailed is set by the <script onerror>
+    // in dashboard.html) from "the script downloaded fine but never set
+    // window.docx" (a CDN build issue), so the on-screen error actually
+    // points at the right fix instead of a generic connectivity guess.
+    const reason = window.__docxLoadFailed
+      ? "The report generator script failed to download (check your internet connection, or an ad blocker / extension may be blocking cdn.jsdelivr.net)."
+      : "The report generator script loaded but didn't set itself up correctly (this is a library/CDN issue, not your connection).";
+    throw new Error(`${reason} Reload the page and try again; if it keeps happening, open the browser console for details.`);
   }
 }
 
