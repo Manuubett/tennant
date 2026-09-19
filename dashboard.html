@@ -5,8 +5,56 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Staff Dashboard - Sanefi Rent App</title>
 <link rel="stylesheet" href="app-style.css">
+<style>
+  #app-loading-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+    transition: opacity .35s ease;
+  }
+  #app-loading-overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  #app-loading-overlay .loading-logo {
+    width: 190px;
+    max-width: 60vw;
+    animation: sanefi-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes sanefi-pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.04); opacity: .85; }
+  }
+  #app-loading-overlay .loading-spinner {
+    width: 34px;
+    height: 34px;
+    border: 3px solid #f6d3e6;
+    border-top-color: #e6007e;
+    border-radius: 50%;
+    animation: sanefi-spin .8s linear infinite;
+  }
+  @keyframes sanefi-spin {
+    to { transform: rotate(360deg); }
+  }
+</style>
 </head>
 <body>
+
+<!-- Full-screen splash shown while auth resolves and the live caches
+     (landlords/units/tenants) load for the first time. Removed by
+     hideLoadingOverlay() in dashboard.js once the stat row and first
+     tab have actually rendered — see the startLiveCaches(...) callback
+     at the bottom of that file. -->
+<div id="app-loading-overlay">
+  <img src="sanefi-logo.png" alt="Sanefi Consult" class="loading-logo">
+  <div class="loading-spinner"></div>
+</div>
 
 <div class="dashboard-shell">
 
