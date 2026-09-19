@@ -1,4 +1,3 @@
-
 const statRow = document.getElementById("stat-row");
 const tabsBox = document.getElementById("tabs");
 const contentBox = document.getElementById("tab-content");
@@ -755,7 +754,17 @@ async function renderTenantsTab() {
 // as pill-verified). Update the literal below if your signup flow uses
 // a different status string.
 async function approveTenant(tenantId) {
+  // Bug fix: approving a tenant never touched their unit's `occupancy`
+  // field, so a unit could have a real, active tenant assigned to it and
+  // still show as "Vacant" in the Units tab forever, since nothing else
+  // in the app writes to units.occupancy except the manual pill toggle.
+  const tenantDoc = tenantsCache.find((d) => d.id === tenantId);
+  const unitId = tenantDoc ? tenantDoc.data().unitId : null;
+
   await db.collection("tenants").doc(tenantId).update({ status: "active" });
+  if (unitId) {
+    await db.collection("units").doc(unitId).update({ occupancy: "occupied" });
+  }
   addNotification(tenantId, "tenant_approved", "Your account has been approved.", {});
 }
 
