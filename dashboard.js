@@ -924,12 +924,32 @@ async function renderTenantProfile(tenantId) {
 
   if (activeTab !== "tenants" || viewingTenantId !== tenantId) return;
 
-  const depositHTML = depositSnap.empty ? `<p class="card-sub">No deposit on record.</p>` : (() => {
-    const d = depositSnap.docs[0].data();
-    const refunded = d.status === "refunded";
-    return `<div class="card-sub">${money(d.amountPaid)} paid on ${d.paidAt || ""}</div>
-      <div style="margin-top:6px;"><span class="pill ${refunded ? "pill-verified" : "pill-pending"}">${refunded ? "Refunded" : "Held"}</span></div>`;
-  })();
+  // Deposit: split into a read-only summary of the latest deposit on
+  // record for this tenant's unit, plus (below) an inline form so staff
+  // can record/update that deposit right here instead of having to
+  // switch to the separate Deposits tab. Both write to the same
+  // `deposits` collection/fields the Deposits tab already uses, so a
+  // deposit recorded from either place shows up correctly in both.
+  const depositDoc = depositSnap.empty ? null : depositSnap.docs[0];
+  const existingDeposit = depositDoc ? depositDoc.data() : null;
+  const depositRefunded = !!(existingDeposit && existingDeposit.status === "refunded");
+
+  const depositSummaryHTML = !existingDeposit
+    ? `<p class="card-sub">No deposit on record.</p>`
+    : `<div class="card-sub">${money(existingDeposit.amountPaid)} paid on ${existingDeposit.paidAt || ""}</div>
+       <div style="margin-top:6px;"><span class="pill ${depositRefunded ? "pill-verified" : "pill-pending"}">${depositRefunded ? "Refunded" : "Held"}</span></div>`;
+
+  const depositFormHTML = !t.unitId
+    ? `<p class="card-sub" style="margin-top:10px;">Assign this tenant to a unit before recording a deposit.</p>`
+    : depositRefunded
+      ? `<p class="card-sub" style="margin-top:10px;">This deposit has been refunded. Manage further refunds from the Deposits tab.</p>`
+      : `
+      <form id="deposit-inline-form" style="margin-top:14px;">
+        <div class="field"><label>Amount Paid (KSh)</label><input type="number" name="amountPaid" min="0" required value="${existingDeposit ? existingDeposit.amountPaid : ""}"></div>
+        <div class="field"><label>Date Paid</label><input type="date" name="paidAt" required value="${existingDeposit ? existingDeposit.paidAt : ""}"></div>
+        <button type="submit" class="btn btn-outline">${existingDeposit ? "Update Deposit" : "Record Deposit"}</button>
+        <p class="alert alert-success" id="deposit-inline-success" style="display:none;">Saved.</p>
+      </form>`;
 
   const paymentsHTML = paymentsSnap.empty ? `<p class="empty-state">No payments yet.</p>` : paymentsSnap.docs.map((doc) => {
     const p = doc.data();
@@ -974,7 +994,8 @@ async function renderTenantProfile(tenantId) {
     </div>
     <div class="card">
       <div class="card-title">Deposit</div>
-      ${depositHTML}
+      ${depositSummaryHTML}
+      ${depositFormHTML}
     </div>
     <h3 style="margin-bottom:8px;">Payment History</h3>
     <div class="card">${paymentsHTML}</div>
@@ -999,6 +1020,44 @@ async function renderTenantProfile(tenantId) {
       alert("Couldn't save: " + err.message);
     }
   });
+
+  // Inline Deposit form — writes to the same `deposits` collection/fields
+  // as the Deposits tab. If a deposit already exists for this unit it's
+  // updated in place instead of creating a duplicate. Not rendered at
+  // all once the deposit has been refunded (see depositFormHTML above).
+  const depositInlineForm = document.getElementById("deposit-inline-form");
+  if (depositInlineForm) {
+    depositInlineForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = new FormData(depositInlineForm);
+      const payload = {
+        unitId: t.unitId,
+        landlordId: t.landlordId || (unitDoc ? unitDoc.data().landlordId : null),
+        tenantName: t.name || "",
+        amountPaid: Number(data.get("amountPaid")) || 0,
+        paidAt: data.get("paidAt")
+      };
+      const submitBtn = depositInlineForm.querySelector("button[type='submit']");
+      if (submitBtn) submitBtn.disabled = true;
+      try {
+        if (depositDoc) {
+          await db.collection("deposits").doc(depositDoc.id).update(payload);
+        } else {
+          await db.collection("deposits").add({
+            ...payload,
+            status: "held",
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+        // Re-render the profile so the summary above and the "Update"
+        // vs "Record" form state reflect what was just saved.
+        renderTenantProfile(tenantId);
+      } catch (err) {
+        alert("Couldn't save deposit: " + err.message);
+        if (submitBtn) submitBtn.disabled = false;
+      }
+    });
+  }
 
   contentBox.querySelectorAll("[data-mtn-action]").forEach((btn) => {
     btn.addEventListener("click", async () => {
