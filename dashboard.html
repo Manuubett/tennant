@@ -121,6 +121,13 @@
 <!-- "All Properties" bundles one .docx per property into a single zip -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="dashboard.js"></script>
+<!-- reply.js: click-to-navigate for notifications. Defines
+     window.onNotificationClick, which notifications.js calls after
+     marking a notification read. Must load after dashboard.js since it
+     reads dashboard.js globals (TABS, activeTab, viewingTenantId,
+     renderTabs, renderActiveTab, openThread) — those reads only happen
+     later, on click, but loading it after keeps the dependency obvious. -->
+<script src="reply.js"></script>
 <script>
   // Off-canvas sidebar for mobile — presentation only, independent of dashboard.js
   (function () {
